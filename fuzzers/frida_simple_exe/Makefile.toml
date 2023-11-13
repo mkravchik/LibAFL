@@ -1,0 +1,72 @@
+# Variables
+[env]
+CARGO_TARGET_DIR = { value = "target", condition = { env_not_set = ["CARGO_TARGET_DIR"] } }
+FUZZER_NAME={ source = "${CARGO_MAKE_RUST_TARGET_OS}", default_value = "frida_simple_exe", mapping = {"windows" = "frida_simple_exe.dll"} }
+PROFILE = { value = "release", condition = {env_not_set = ["PROFILE"]} }
+PROFILE_DIR = {value = "release", condition = {env_not_set = ["PROFILE_DIR"] }}
+
+[tasks.default]
+description = "Custom default task"
+
+[tasks.legacy-migration]
+description = "Overriding useless build in debug"
+
+[tasks.unsupported]
+script_runner="@shell"
+script='''
+echo "Cargo-make not integrated yet on this"
+'''
+
+# Harness
+[tasks.harness]
+linux_alias = "unsupported"
+mac_alias = "unsupported"
+windows_alias = "harness_windows"
+
+
+[tasks.harness_windows]
+script_runner="@shell"
+script='''
+cl test\test.cpp -o test.exe
+REM cl.exe /LD harness.cc /link /dll
+'''
+
+# Fuzzer
+[tasks.fuzzer]
+linux_alias = "unsupported"
+mac_alias = "unsupported"
+windows_alias = "fuzzer_windows"
+
+[tasks.fuzzer_windows]
+script_runner="@shell"
+script='''
+echo Building ${PROFILE}
+cargo build --profile ${PROFILE}
+cp ./target/${PROFILE_DIR}/${FUZZER_NAME} .
+'''
+
+# Run the fuzzer
+[tasks.run]
+linux_alias = "unsupported"
+mac_alias = "unsupported"
+windows_alias = "run_windows"
+
+[tasks.run_windows]
+script_runner = "@shell"
+script='''
+python ./frida_inject.py
+'''
+dependencies = [ "fuzzer", "harness" ]
+
+# Test
+[tasks.test]
+linux_alias = "unsupported"
+mac_alias = "unsupported"
+windows_alias = "test_windows"
+
+[tasks.test_windows]
+script_runner = "@shell"
+script='''
+start "" python ./frida_inject.py
+'''
+dependencies = [ "fuzzer", "harness" ]
