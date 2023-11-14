@@ -1,80 +1,54 @@
+import time
 import frida
-import sys
+import threading
 
-moduleName = "test.exe"; # The module you want to hook
-dllPath = "frida_simple_exe.dll"; 
-hookName = "main_hook"; # It is not really a hook, it accepts the real address of main
+# Set up a threading event for synchronization
+script_loaded_event = threading.Event()
+process_exited_event = threading.Event()
 
+def on_message(message, data):
+    if message['type'] == 'send':
+        print("[*] From Frida: " + message['payload'])
+        if message['payload'] == "Script loaded":
+                    script_loaded_event.set()    
+    elif message['type'] == 'error':
+        print("[!] Frida Error: " + message['stack'])
 
-ss = """
-const moduleName = "test.exe"; // The module you want to hook
-const dllPath = "frida_simple_exe.dll"; // Replace with your DLL path
-const hookName = "main_hook"; // It is not really a hook, it accepts the real address of main
+def on_detached(reason):
+    print("[!] Detached from process: " + reason)
+    process_exited_event.set()
 
-// Find the module and function to hook
-const targetModule = Process.getModuleByName(moduleName);
-//const targetFunction = targetModule.findExportByName(functionName);
-const mainOffset = 0x1200; // Replace with the offset of 'main'
-
-// This function finds the base address of the module
-function getModuleBaseAddress(moduleName) {
-  return Module.findBaseAddress(moduleName);
-}
-
-// Calculate the absolute address
-const baseAddress = getModuleBaseAddress(moduleName);
-const mainAbsAddress = baseAddress.add(mainOffset);
-
-console.log("Base Address: " + baseAddress);
-console.log("Main Address: " + mainAbsAddress);
-
-// Print the state of all threads
-var threads = Process.enumerateThreads();
-threads.forEach(function (thread) {
-    console.log('Thread ID:', thread.id, 'State:', thread.state);
-});
-
-// // Inject your DLL
-const loadLibrary = new NativeFunction(Module.findExportByName("kernel32.dll", "LoadLibraryA"), 'pointer', ['pointer']);
-const dllStr = Memory.allocUtf8String(dllPath);
-var myLibAddr = loadLibrary(dllStr);
-console.log("DLL loaded at " + myLibAddr);
-var myLibrary = Process.findModuleByAddress(myLibAddr)
-console.log("myLibrary", myLibrary);
-var myHook = myLibrary.findExportByName(hookName);    
-console.log("My hook at " + myHook);
-
-const mainHook = new NativeFunction(myHook, 'int', ['pointer']);
-
-console.log("Calling hook at " + myHook);
-var hookRes = mainHook(mainAbsAddress);
-console.log("Hook returned " + hookRes);
-
-Interceptor.attach(mainAbsAddress, {
-  onEnter: function(args) {
-
-    var argc = args[0].toInt32();
-    var argv = args[1];
-
-    for (var i = 0; i < argc; i++) {
-        var argPtr = Memory.readPointer(argv.add(i * Process.pointerSize));
-        console.log('Argument[' + i + ']: ' + Memory.readUtf8String(argPtr));
-    }
-  },
-  onLeave: function(retval) {
-    console.log("onLeave");    
-    // If you chose to call the original 'main'
-    // if (this.callOriginal) {
-    //   // Code to handle after original 'main' execution
-    // }
-  }
-});
-"""
-
+# Your existing code to set up Frida session
 device = frida.get_local_device()
-pid = device.spawn("test.exe", argv=["test.exe","-f", "test\\ok_input.txt"])
+pid = device.spawn(["test.exe", "-f", "test\\ok_input.txt"])
 session = device.attach(pid)
-script = session.create_script(ss)
+session.on('detached', on_detached)
+
+# Read the Frida script
+with open("frida_inject.js", "r") as f:
+    script_code = f.read()
+
+# Create the script
+script = session.create_script(script_code)
+
+# Connect the message handler
+script.on('message', on_message)
+
+# Load the script
 script.load()
+
+# Wait for the script to be fully loaded
+script_loaded_event.wait()
+
+# Sleep for 30 seconds to allow debugger to attach
+# print("Sleeping for 30 seconds...")
+# time.sleep(30)
+
+# Continue with your process (e.g., resuming the process)
 device.resume(pid)
+
+# Wait for the process to exit
+process_exited_event.wait()
+
+print("Done!")
 
