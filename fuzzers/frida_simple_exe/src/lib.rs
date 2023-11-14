@@ -76,11 +76,14 @@ type MainFunc = extern "C" fn(i32, *const *const u8, *const *const u8) -> i32;
 pub unsafe extern "C" fn main_hook(main_addr: MainFunc) -> i32 {
     // fuzzer::lib(ORIG_MAIN);
     log(format!("main_hook got the main addr: {:?}\n", main_addr).as_str());
+    let arg0 = CString::new("test.exe").unwrap();
+    let arg1 = CString::new("-f").unwrap();
+    let arg2 = CString::new("@@").unwrap();
+
     let argv: [*const u8; 3] = [
-        null(), // dummy value
-        "-f".as_ptr().cast(),
-        "bla".as_ptr().cast(), // len.as_ptr().cast(),
-                              // buf.as_ptr().cast(),
+        arg0.as_ptr().cast(), 
+        arg1.as_ptr().cast(),
+        arg2.as_ptr().cast(),
     ];
 
     let env: [*const u8; 2] = [
@@ -88,9 +91,9 @@ pub unsafe extern "C" fn main_hook(main_addr: MainFunc) -> i32 {
         null(), // dummy value
     ];
 
-    log(format!(">> Inside main_hook, calling main at {:?}\n", main_addr).as_str());
-    let res = main_addr(1, argv.as_ptr(), env.as_ptr());
-    log(format!("<< Inside main_hook, main returned {:?}\n", res).as_str());
+    log(format!(">>>> Inside main_hook, calling main at {:?}\n", main_addr).as_str());
+    let res = main_addr(3, argv.as_ptr(), env.as_ptr());
+    log(format!("<<<< Inside main_hook, main returned {:?}\n", res).as_str());
 
     // fuzzer::lib(main_addr);
     42
