@@ -101,10 +101,11 @@ char *crash = NULL;
 
 // actual target function
 
-void FUZZ_TARGET_MODIFIERS fuzz(char *name) {
+extern "C" void FUZZ_TARGET_MODIFIERS fuzz(char *name) {
   char    *sample_bytes = NULL;
   uint32_t sample_size = 0;
 
+  printf("EXE>> fuzz %p name %s\n", fuzz, name);
   // read the sample either from file or
   // shared memory
   if (use_shared_memory) {
@@ -138,7 +139,7 @@ void FUZZ_TARGET_MODIFIERS fuzz(char *name) {
   if (sample_bytes) free(sample_bytes);
 }
 
-int main(int argc, char **argv) {
+extern "C" int FUZZ_TARGET_MODIFIERS main(int argc, char **argv) {
   if (argc != 3) {
     printf("Usage: %s <-f|-m> <file or shared memory name>\n", argv[0]);
     return 0;
@@ -147,7 +148,7 @@ int main(int argc, char **argv) {
   // printf("Sleeping for 30 seconds to allow for debugger to attach\n");
   // Sleep(30 * 1000);
 
-  printf(">> main %p argc %d, argv[1] %s, argv[2] %s\n", main, argc, argv[1], argv[2]);
+  printf("EXE>> main %p argc %d, argv[1] %s, argv[2] %s\n", main, argc, argv[1], argv[2]);
 
   if (!strcmp(argv[1], "-m")) {
     use_shared_memory = true;
@@ -164,6 +165,7 @@ int main(int argc, char **argv) {
     if (!setup_shmem(argv[2])) { printf("Error mapping shared memory\n"); }
   }
 
+  // LoadLibraryA("frida_simple_exe.dll");
   fuzz(argv[2]);
 
   printf("Bye\n");

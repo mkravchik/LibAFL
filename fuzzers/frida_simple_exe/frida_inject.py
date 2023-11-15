@@ -40,9 +40,11 @@ script.load()
 # Wait for the script to be fully loaded
 script_loaded_event.wait()
 
+session.detach()
+
 # Sleep for 30 seconds to allow debugger to attach
-# print("Sleeping for 30 seconds...")
-# time.sleep(30)
+# print("Sleeping for 60 seconds...")
+# time.sleep(60)
 
 # Continue with your process (e.g., resuming the process)
 device.resume(pid)
