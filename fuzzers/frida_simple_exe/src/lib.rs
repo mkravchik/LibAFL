@@ -2,26 +2,29 @@
 use winapi;
 
 use std::ffi::{CString, c_void, c_char};
-use std::mem::transmute;
-
-use std::ptr::{null, null_mut};
+use std::ptr::{null_mut};
 use winapi::um::consoleapi::WriteConsoleA;
 use winapi::um::processenv::GetStdHandle;
 use winapi::um::winbase::STD_OUTPUT_HANDLE;
 
 use frida_gum::{Gum, NativePointer, Module};
 use frida_gum::interceptor::Interceptor;
-// mod fuzzer;
 use lazy_static::lazy_static;
 use std::cell::UnsafeCell;
 use std::sync::Mutex;
+
+mod fuzzer;
 
 lazy_static! {
     static ref GUM: Gum = unsafe { Gum::obtain() };
     static ref ORIGINAL_FUZZ: Mutex<UnsafeCell<Option<FuzzFunc>>> =
         Mutex::new(UnsafeCell::new(None));
+    static ref ORIGINAL_MAIN: Mutex<UnsafeCell<Option<MainFunc>>> =
+        Mutex::new(UnsafeCell::new(None));
 }
-type FuzzFunc = extern "C" fn(*const c_char) -> ();
+
+type MainFunc = extern "C" fn(i32, *const *const u8, *const *const u8) -> i32;
+type FuzzFunc = extern "C" fn(*const c_char, u32) -> ();
 
 #[cfg(windows)]
 pub fn write_to_console(message: &str) {
@@ -87,13 +90,13 @@ pub extern "system" fn DllMain(
             // Let's cheat
             let func =
                 Module::find_export_by_name(Some("test.exe"), 
-                "fuzz"
+                "main"//"fuzz"
             );
             let func = func.unwrap();
             if !func.is_null() {
                 // log(format!("main addr: {:?}\n", main).as_str());
-                // set_main_hook(main);
-                set_fuzz_hook(func);
+                // set_fuzz_hook(func);
+                set_main_hook(func);
             }
     
         }
@@ -113,66 +116,59 @@ pub extern "system" fn DllMain(
     true as winapi::shared::minwindef::BOOL
 }
 
-type MainFunc = extern "C" fn(i32, *const *const u8, *const *const u8) -> i32;
-
-#[no_mangle]
-pub unsafe extern "C" fn main_hook(main_addr: MainFunc) -> i32 {
-    // fuzzer::lib(ORIG_MAIN);
-    log(format!("main_hook got the main addr: {:?}\n", main_addr).as_str());
-    let arg0 = CString::new("test.exe").unwrap();
-    let arg1 = CString::new("-f").unwrap();
-    let arg2 = CString::new("@@").unwrap();
-
-    let argv: [*const u8; 3] = [
-        arg0.as_ptr().cast(), 
-        arg1.as_ptr().cast(),
-        arg2.as_ptr().cast(),
-    ];
-
-    let env: [*const u8; 2] = [
-        null(), // dummy value
-        null(), // dummy value
-    ];
-
-    log(format!(">>>> Inside main_hook, calling main at {:?}\n", main_addr).as_str());
-    let res = main_addr(3, argv.as_ptr(), env.as_ptr());
-    log(format!("<<<< Inside main_hook, main returned {:?}\n", res).as_str());
-
-    // fuzzer::lib(main_addr);
-    42
-}
-
-extern "C" fn _dummy_main(_argc: i32, _argv: *const *const u8, _env: *const *const u8) -> i32 {
-    0
-}
-
-static mut ORIG_MAIN: MainFunc = _dummy_main;
-
 #[no_mangle]
 pub unsafe extern "C" fn rust_main_hook(
     argc: i32,
     argv: *const *const u8,
-    env: *const *const u8,
+    _env: *const *const u8,
 ) -> i32 {
-    // fuzzer::lib(ORIG_MAIN);
     log(format!("rust_main_hook called! argc {:?}\n", argc).as_str());
-    ORIG_MAIN(argc, argv, env)
+    //Log all the arguments
+    for i in 0..argc {
+        let arg = std::ffi::CStr::from_ptr(*argv.offset(i as isize) as *const c_char).to_str().unwrap();
+        log(format!("arg[{}]: {}\n", i, arg).as_str());
+    }
+
+    // Let's cheat again - finding the fuzz function
+    let func =
+        Module::find_export_by_name(Some("test.exe"), 
+        "fuzz_internal"
+    );
+    let func = func.unwrap();
+    if !func.is_null() {
+        let func_ptr: *mut c_void = func.0;
+        let fuzz_func: FuzzFunc = std::mem::transmute(func_ptr);
+        fuzzer::simple_lib(fuzz_func);
+        // set_fuzz_hook(func);
+    }
+    0
+    // ORIGINAL_MAIN
+    // .lock()
+    // .unwrap()
+    // .get()
+    // .as_ref()
+    // .unwrap()
+    // .unwrap()(argc, argv, env)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn rust_fuzz_hook(
-    name: *const c_char,
+    sample_bytes: *const c_char,
+    sample_size: u32
 ) -> () {
 
-    log(format!("rust_fuzz_hook called! {}\n",
-        std::ffi::CStr::from_ptr(name).to_str().unwrap()).as_str());
+    log(format!("rust_fuzz_hook called! {:p} {}\n",
+        // std::ffi::CStr::from_ptr(sample_bytes).to_str().unwrap()).as_str()
+        sample_bytes, sample_size).as_str()
+    );
+    
     ORIGINAL_FUZZ
         .lock()
         .unwrap()
         .get()
         .as_ref()
         .unwrap()
-        .unwrap()(name)
+        .unwrap()(sample_bytes, sample_size)
 }
 
 #[no_mangle]
@@ -207,31 +203,29 @@ pub extern "C" fn set_fuzz_hook(fuzz_addr_ptr: NativePointer) -> i32 {
 
 #[no_mangle]
 // pub unsafe extern "C" fn set_main_hook(main_addr: MainFunc) -> i32 {
-pub unsafe extern "C" fn set_main_hook(main_addr_ptr: NativePointer) -> i32 {
-    // fuzzer::lib(ORIG_MAIN);
+pub extern "C" fn set_main_hook(main_addr_ptr: NativePointer) -> i32 {
 
     let main_addr_raw: *mut c_void = main_addr_ptr.0;
-    let main_addr: MainFunc = transmute(main_addr_raw);
-
-    log(format!("set_main_hook got the main addr: {:?}\n", main_addr).as_str());
     
-    ORIG_MAIN = main_addr; // I should undo it is the hook failed
+    //Print the pointer's value as string
+    log(format!("set_fuzz_hook got the addr: {:p}\n", main_addr_raw).as_str());
 
-    let gum = unsafe { Gum::obtain() };
-
-    let result = Interceptor::obtain(&gum).replace(
-        NativePointer(main_addr as *mut c_void),
+    let result = Interceptor::obtain(&GUM).replace(
+        main_addr_ptr,
         NativePointer(rust_main_hook as *mut c_void),
         NativePointer(std::ptr::null_mut()),
     );
 
     match result {
-        Ok(_) => {
-            log("Successfully replaced function\n");
+        Ok(org_main) => {
+            log("Successfully replaced main function\n");
+            unsafe{
+                *ORIGINAL_MAIN.lock().unwrap().get_mut() = Some(std::mem::transmute(org_main));
+            }
             0
         },
         Err(e) => {
-            log(format!("Failed to replace function: {}\n", e).as_str());
+            log(format!("Failed to replace main function: {}\n", e).as_str());
             -1
         }
     }
