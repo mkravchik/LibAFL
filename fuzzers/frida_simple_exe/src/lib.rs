@@ -92,10 +92,8 @@ pub extern "system" fn DllMain(
             let func = func.unwrap();
             if !func.is_null() {
                 // log(format!("main addr: {:?}\n", main).as_str());
-                unsafe{
-                    // set_main_hook(main);
-                    set_fuzz_hook(func);
-                }
+                // set_main_hook(main);
+                set_fuzz_hook(func);
             }
     
         }
@@ -178,14 +176,13 @@ pub unsafe extern "C" fn rust_fuzz_hook(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn set_fuzz_hook(fuzz_addr_ptr: NativePointer) -> i32 {
+pub extern "C" fn set_fuzz_hook(fuzz_addr_ptr: NativePointer) -> i32 {
 
     let fuzz_addr_raw: *mut c_void = fuzz_addr_ptr.0;
-    let fuzz_addr: FuzzFunc = transmute(fuzz_addr_raw);
-
-    log(format!("set_fuzz_hook got the addr: {:?}\n", fuzz_addr).as_str());
- 
     
+    //Print the pointer's value as string
+    log(format!("set_fuzz_hook got the addr: {:p}\n", fuzz_addr_raw).as_str());
+
     let result = Interceptor::obtain(&GUM).replace(
         fuzz_addr_ptr,
         NativePointer(rust_fuzz_hook as *mut c_void),
@@ -195,7 +192,9 @@ pub unsafe extern "C" fn set_fuzz_hook(fuzz_addr_ptr: NativePointer) -> i32 {
     match result {
         Ok(org_fuzz) => {
             log("Successfully replaced fuzz function\n");
-            *ORIGINAL_FUZZ.lock().unwrap().get_mut() = Some(std::mem::transmute(org_fuzz));
+            unsafe{
+                *ORIGINAL_FUZZ.lock().unwrap().get_mut() = Some(std::mem::transmute(org_fuzz));
+            }
             0
         },
         Err(e) => {
