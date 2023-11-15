@@ -1,3 +1,5 @@
+# TODO - rewrite in Rust using frida-rust crate
+
 import time
 import frida
 import threading
@@ -20,7 +22,8 @@ def on_detached(reason):
 
 # Your existing code to set up Frida session
 device = frida.get_local_device()
-pid = device.spawn(["test.exe", "-f", "test\\ok_input.txt"])
+# pid = device.spawn(["test.exe", "-f", "test\\ok_input.txt"])
+pid = device.spawn(["test.exe"])
 session = device.attach(pid)
 session.on('detached', on_detached)
 
