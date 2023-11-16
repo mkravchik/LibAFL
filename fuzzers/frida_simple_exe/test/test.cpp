@@ -104,15 +104,26 @@ char *crash = NULL;
 extern "C" void FUZZ_TARGET_MODIFIERS fuzz_internal(
   char    *sample_bytes, uint32_t sample_size)
 {
-  printf("EXE>> fuzz_internal %p sample_bytes %p (%s), sample_size %d\n", 
-    fuzz_internal, sample_bytes, sample_bytes, sample_size);
+  // printf("EXE>> fuzz_internal %p sample_bytes %p (%s), sample_size %d\n", 
+    // fuzz_internal, sample_bytes, sample_bytes, sample_size);
   if (sample_size >= 4) {
-    // check if the sample spells "test"
-    if (*(uint32_t *)(sample_bytes) == 0x74736574) {
-      printf("Found test. Going to crash.\n");
-      // if so, crash
-      crash[0] = 1;
+    // check if the sample spells "test", but do it char-by-char to guide the fuzzer
+    if (sample_bytes[0] == 't') {
+      if (sample_bytes[1] == 'e') {
+        if (sample_bytes[2] == 's') {
+          if (sample_bytes[3] == 't') {
+            printf("Found test. Going to crash.\n");
+            // if so, crash
+            crash[0] = 1;
+          }
+        }
+      }
     }
+    // if (*(uint32_t *)(sample_bytes) == 0x74736574) {
+    //   printf("Found test. Going to crash.\n");
+    //   // if so, crash
+    //   crash[0] = 1;
+    // }
   }
 }
 
