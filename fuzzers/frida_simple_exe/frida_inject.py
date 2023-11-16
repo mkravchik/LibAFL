@@ -3,6 +3,7 @@
 import time
 import frida
 import threading
+import sys
 
 # Set up a threading event for synchronization
 script_loaded_event = threading.Event()
@@ -23,7 +24,7 @@ def on_detached(reason):
 # Your existing code to set up Frida session
 device = frida.get_local_device()
 # pid = device.spawn(["test.exe", "-f", "test\\ok_input.txt"])
-pid = device.spawn(["test.exe"])
+pid = device.spawn(sys.argv[1:])
 session = device.attach(pid)
 session.on('detached', on_detached)
 

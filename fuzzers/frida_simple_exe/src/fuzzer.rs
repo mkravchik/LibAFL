@@ -4,37 +4,35 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-use std::{path::PathBuf, ptr::null};
+use std::{path::PathBuf};
 
 use frida_gum::Gum;
 use libafl::{
-    corpus::{CachedOnDiskCorpus, Corpus, OnDiskCorpus},
-    events::{launcher::Launcher, llmp::LlmpRestartingEventManager, EventConfig, SimpleEventManager},
+    corpus::{CachedOnDiskCorpus, OnDiskCorpus},
+    events::{SimpleEventManager},
     executors::{inprocess::InProcessExecutor, ExitKind},
     feedback_or, feedback_or_fast,
     feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback, TimeoutFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
     generators::RandPrintablesGenerator,
     inputs::{BytesInput, HasTargetBytes},
-    monitors::{SimpleMonitor, MultiMonitor},
+    monitors::{SimpleMonitor},
     mutators::{
-        scheduled::{havoc_mutations, tokens_mutations, StdScheduledMutator},
+        scheduled::{havoc_mutations, StdScheduledMutator},
         // token_mutations::{I2SRandReplace, Tokens},
     },
     observers::{HitcountsMapObserver, StdMapObserver, TimeObserver},
     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
     stages::{StdMutationalStage},
-    state::{HasCorpus, StdState},
-    Error,
+    state::{StdState},
 };
 #[cfg(unix)]
 use libafl::{feedback_and_fast, feedbacks::ConstFeedback};
 use libafl_bolts::{
-    cli::{parse_args, FuzzerOptions},
+    cli::{parse_args},
     current_nanos,
     rands::StdRand,
-    shmem::{ShMemProvider, StdShMemProvider},
-    tuples::{tuple_list, Merge},
+    tuples::{tuple_list},
     AsSlice,
 };
 #[cfg(unix)]
@@ -225,8 +223,7 @@ pub unsafe fn simple_lib(fuzz: extern "C" fn(*const c_char, u32) -> ()) {
     let mut frida_harness = |input: &BytesInput| {
         let target = input.target_bytes();
         let buf = target.as_slice();
-
-        println!("Inside frida_harness, calling fuzz at {:?}", fuzz);
+        // println!("Inside frida_harness, calling fuzz at {:?}", fuzz);
         fuzz(buf.as_ptr().cast(), buf.len() as u32);
         ExitKind::Ok
     };
