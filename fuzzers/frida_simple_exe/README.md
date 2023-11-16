@@ -18,3 +18,6 @@ Copy the fuzzer to the current directory: `copy /Y target\release\frida_simple_e
 
 ## Run
 `python frida_inject.py test.exe -H test.exe`
+
+To run on multiple CPUs run:
+`python frida_inject.py test.exe -H test.exe -c 0,1,2,3`
