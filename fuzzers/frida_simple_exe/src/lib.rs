@@ -8,9 +8,9 @@ use winapi::um::processenv::GetStdHandle;
 use winapi::um::winbase::STD_OUTPUT_HANDLE;
 use winapi::um::memoryapi::{VirtualAllocEx, WriteProcessMemory, VirtualFreeEx};
 use winapi::um::processthreadsapi::{CreateRemoteThread, PROCESS_INFORMATION};
-use winapi::um::winnt::{MEM_COMMIT, MEM_RELEASE, PAGE_READWRITE, PROCESS_ALL_ACCESS};
+use winapi::um::winnt::{MEM_COMMIT, MEM_RELEASE, PAGE_READWRITE, 
+    IMAGE_DOS_HEADER, IMAGE_NT_HEADERS};
 use winapi::um::handleapi::CloseHandle;
-use winapi::um::libloaderapi::LoadLibraryA;
 use winapi::shared::ntdef::HANDLE;
 
 use frida_gum::{Gum, NativePointer, Module};
@@ -18,11 +18,13 @@ use frida_gum::interceptor::Interceptor;
 use lazy_static::lazy_static;
 use std::cell::UnsafeCell;
 use std::sync::Mutex;
-
+use std::env;
 mod fuzzer;
 
 lazy_static! {
     static ref GUM: Gum = unsafe { Gum::obtain() };
+    static ref ORIGINAL_ENTRY_POINT: Mutex<UnsafeCell<Option<EntryPoint>>> =
+        Mutex::new(UnsafeCell::new(None));
     static ref ORIGINAL_FUZZ: Mutex<UnsafeCell<Option<FuzzFunc>>> =
         Mutex::new(UnsafeCell::new(None));
     static ref ORIGINAL_MAIN: Mutex<UnsafeCell<Option<MainFunc>>> =
@@ -31,6 +33,7 @@ lazy_static! {
         Mutex::new(UnsafeCell::new(None));
 }
 
+type EntryPoint = extern "C" fn() -> ();
 type MainFunc = extern "C" fn(i32, *const *const u8, *const *const u8) -> i32;
 type FuzzFunc = extern "C" fn(*const c_char, u32) -> ();
 type CreateProcessWFunc = unsafe extern "C" fn(
@@ -111,20 +114,10 @@ pub extern "system" fn DllMain(
     match fdw_reason {
         winapi::um::winnt::DLL_PROCESS_ATTACH => {
             log("DLL_PROCESS_ATTACH\n");
-            // Let's cheat
-            let func =
-                Module::find_export_by_name(Some("test.exe"), 
-                "main"//"fuzz"
-            );
-            let func = func.unwrap();
-            if !func.is_null() {
-                // log(format!("main addr: {:?}\n", main).as_str());
-                // set_fuzz_hook(func);
-                set_main_hook(func);
-            }
-    
+
+            hook_trigger_func();
+
             // Hook process creation so that we can inject the fuzzer in the new process
-            let mut interceptor = Interceptor::obtain(&GUM);
             let create_process = Module::find_export_by_name(Some("kernel32.dll"),
                 "CreateProcessW");
             let create_process = create_process.unwrap();
@@ -132,7 +125,6 @@ pub extern "system" fn DllMain(
                 log(format!("CreateProcessW addr: {:p}\n", create_process.0).as_str());
                 set_create_process_hook(create_process);
             }
-            
         }
         winapi::um::winnt::DLL_PROCESS_DETACH => {
             log("DLL_PROCESS_DETACH\n");
@@ -150,8 +142,183 @@ pub extern "system" fn DllMain(
     true as winapi::shared::minwindef::BOOL
 }
 
+/// Hooking the fuzzing starting trigger point
+/// We can start fuzzing process either when the exe entry point is called
+/// or when the main function is called
+/// or when the fuzz function is called
+/// We distinguish between the cases by checking the value of the 
+/// FUZZ_TRIGGER environment variable
+/// You can set it before the injection as SET FUZZ_TRIGGER=main@0x1270
+/// If it is set to "entry_point" we hook the exe entry point
+/// If it is set to "main" we hook the main function
+/// If it is set to anything else we hook the specified function, 
+/// but it should conform to the fuzz function signature
+/// In either option, we support providing the offset of the function to hook
+/// as specified in the FUZZ_TRIGGER environment variable after the @ sign
+/// If the offset is not provided, the function must be exported
+fn hook_trigger_func() -> () {
+    log("hook_trigger_func called!\n");
+    let trigger_func = env::var("FUZZ_TRIGGER").unwrap_or_else(|_| "entry_point".to_owned());
+    log(format!("FUZZ_TRIGGER: {}\n", trigger_func).as_str());
+    let trigger_func_offset = trigger_func.find("@");
+    let trigger_func_name = match trigger_func_offset {
+        Some(offset) => &trigger_func[..offset],
+        None => &trigger_func[..]
+    };
+    log(format!("trigger_func_name: {}\n", trigger_func_name).as_str());
+    let trigger_func_offset = match trigger_func_offset {
+        Some(offset) => {
+            let offset_str = &trigger_func[offset+1..];
+            log(format!("offset_str: {}\n", offset_str).as_str());
+            let offset = u64::from_str_radix(offset_str, 16);
+            match offset {
+                Ok(offset) => offset,
+                Err(e) => {
+                    log(format!("Failed to parse offset: {}\n", e).as_str());
+                    0
+                }
+            }
+        },
+        None => 0
+    };
+    // Now call the appropriate set_XXX_hook function based on the trigger_func_name
+    let exe_base = Module::find_base_address("test.exe");
+    if exe_base.is_null(){
+        log("Failed to get the exe's base address\n");
+    }
+    match trigger_func_name {
+        "entry_point" => {
+            if !exe_base.is_null() {
+                set_entry_point_hook(NativePointer((exe_base.0 as u64 + trigger_func_offset) as *mut c_void));
+            }
+        },
+        "main" => {
+            // if the offset is provided, we need to add it to the exe base address
+            if trigger_func_offset != 0 {
+                if !exe_base.is_null() {
+                    set_main_hook(NativePointer((exe_base.0 as u64 + trigger_func_offset) as *mut c_void));
+                }
+            }
+            else{
+                let func =
+                    Module::find_export_by_name(Some("test.exe"),
+                    "main"
+                );
+                let func = func.unwrap();
+                if !func.is_null() {
+                    // log(format!("main addr: {:?}\n", main).as_str());
+                    // set_fuzz_hook(func);
+                    set_main_hook(NativePointer((func.0 as u64 + trigger_func_offset) as *mut c_void));
+                }
+            }
+        },
+        _ => {
+            if trigger_func_offset != 0 {
+                if !exe_base.is_null() {
+                    set_fuzz_hook(NativePointer((exe_base.0 as u64 + trigger_func_offset) as *mut c_void));
+                }
+            }
+            else{
+                let func =
+                    Module::find_export_by_name(Some("test.exe"),
+                    trigger_func_name
+                );
+                let func = func.unwrap();
+                if !func.is_null() {
+                    log(format!("{} addr: {:p}\n", trigger_func_name, func.0).as_str());
+                    set_fuzz_hook(func);
+                }
+            }
+        }
+    }
+}
 
-pub extern "C" fn set_create_process_hook(create_proc_addr_ptr: NativePointer) -> i32 {
+//TODO - clean from the unnecessary definition parts 
+#[no_mangle]
+pub fn entry_point_hook(
+) -> () {
+    log("entry_point_hook called!\n");
+
+    unsafe{
+        start_fuzzing();
+
+        ORIGINAL_ENTRY_POINT
+        .lock()
+        .unwrap()
+        .get()
+        .as_ref()
+        .unwrap()
+        .unwrap()()
+    }
+}
+
+unsafe fn start_fuzzing() -> (){
+    // Let's cheat again - finding the fuzz function
+    // But this is not a big deal, we can work with offset as well
+    let func =
+        Module::find_export_by_name(Some("test.exe"), 
+        "fuzz_internal"
+    );
+    let func = func.unwrap();
+    if !func.is_null() {
+        let func_ptr: *mut c_void = func.0;
+        let fuzz_func: FuzzFunc = std::mem::transmute(func_ptr);
+        fuzzer::lib(fuzz_func);
+        // fuzzer::simple_lib(fuzz_func);
+        // set_fuzz_hook(func);
+    }
+}
+
+fn set_entry_point_hook(exe_base_addr_ptr: NativePointer) -> i32 {
+
+    let module_base = exe_base_addr_ptr.0 as *const u8;
+    
+    //Print the pointer's value as string
+    log(format!("set_entry_point_hook got the addr: {:p}\n", module_base).as_str());
+    let mut entry_point_address : *const u8 = null_mut();
+
+    unsafe{
+        // The module base is a pointer to the IMAGE_DOS_HEADER
+        let dos_header: &IMAGE_DOS_HEADER = &*(module_base as *const IMAGE_DOS_HEADER);
+        if dos_header.e_magic != winapi::um::winnt::IMAGE_DOS_SIGNATURE {
+            panic!("Invalid DOS signature");
+        }
+
+        // Calculate the address of the IMAGE_NT_HEADERS
+        let nt_headers: &IMAGE_NT_HEADERS = &*(module_base.offset(dos_header.e_lfanew as isize) as *const IMAGE_NT_HEADERS);
+        if nt_headers.Signature != winapi::um::winnt::IMAGE_NT_SIGNATURE {
+            panic!("Invalid NT signature");
+        }
+
+        // The AddressOfEntryPoint is in the optional header
+        entry_point_address = module_base.offset(nt_headers.OptionalHeader.AddressOfEntryPoint as isize);
+    }
+
+    log(format!("Exe entrypoint at: {:p}\n", entry_point_address as *const c_void).as_str());
+
+    let result = Interceptor::obtain(&GUM).replace(
+        NativePointer(entry_point_address as *mut c_void),
+        NativePointer(entry_point_hook as *mut c_void),
+        NativePointer(std::ptr::null_mut()),
+    );
+
+    match result {
+        Ok(org_fn) => {
+            log("Successfully replaced Exe entry point\n");
+            unsafe{
+                *ORIGINAL_ENTRY_POINT.lock().unwrap().get_mut() = 
+                    Some(std::mem::transmute(org_fn));
+            }
+            0
+        },
+        Err(e) => {
+            log(format!("Failed to replace Exe entry point: {}\n", e).as_str());
+            -1
+        }
+    }
+}
+
+fn set_create_process_hook(create_proc_addr_ptr: NativePointer) -> i32 {
 
     let create_proc_addr_raw: *mut c_void = create_proc_addr_ptr.0;
     
@@ -301,20 +468,10 @@ pub unsafe extern "C" fn rust_main_hook(
         log(format!("arg[{}]: {}\n", i, arg).as_str());
     }
 
-    // Let's cheat again - finding the fuzz function
-    let func =
-        Module::find_export_by_name(Some("test.exe"), 
-        "fuzz_internal"
-    );
-    let func = func.unwrap();
-    if !func.is_null() {
-        let func_ptr: *mut c_void = func.0;
-        let fuzz_func: FuzzFunc = std::mem::transmute(func_ptr);
-        fuzzer::lib(fuzz_func);
-        // fuzzer::simple_lib(fuzz_func);
-        // set_fuzz_hook(func);
-    }
+    start_fuzzing();
     0
+    
+    // We don't call main. We start fuzzing instead
     // ORIGINAL_MAIN
     // .lock()
     // .unwrap()
@@ -335,13 +492,15 @@ pub unsafe extern "C" fn rust_fuzz_hook(
         sample_bytes, sample_size).as_str()
     );
     
-    ORIGINAL_FUZZ
-        .lock()
-        .unwrap()
-        .get()
-        .as_ref()
-        .unwrap()
-        .unwrap()(sample_bytes, sample_size)
+    start_fuzzing()
+    // We don't call the original fuzz function. We start fuzzing instead    
+    // ORIGINAL_FUZZ
+    //     .lock()
+    //     .unwrap()
+    //     .get()
+    //     .as_ref()
+    //     .unwrap()
+    //     .unwrap()(sample_bytes, sample_size)
 }
 
 #[no_mangle]
@@ -381,7 +540,7 @@ pub extern "C" fn set_main_hook(main_addr_ptr: NativePointer) -> i32 {
     let main_addr_raw: *mut c_void = main_addr_ptr.0;
     
     //Print the pointer's value as string
-    log(format!("set_fuzz_hook got the addr: {:p}\n", main_addr_raw).as_str());
+    log(format!("set_main_hook got the addr: {:p}\n", main_addr_raw).as_str());
 
     let result = Interceptor::obtain(&GUM).replace(
         main_addr_ptr,

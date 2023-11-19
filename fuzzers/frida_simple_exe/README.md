@@ -21,3 +21,9 @@ Copy the fuzzer to the current directory: `copy /Y target\release\frida_simple_e
 
 To run on multiple CPUs run:
 `python frida_inject.py test.exe -H test.exe -c 0,1,2,3`
+
+Fuzzing starts when the *trigger function* is called by the application. In future, we may add
+an explicit API call to start fuzzing. The trigger function should be chosen wisely, so that
+all application initialization required for fuzzing is over.
+You can specify the trigger function via environment variable FUZZ_TRIGGER in the format 
+NAME[@OFFSET], e.g., SET FUZZ_TRIGGER=main@0x1270. See the comment at hook_trigger_func for more details.
