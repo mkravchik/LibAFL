@@ -2,7 +2,7 @@
 
 This folder contains an example fuzzer for a closed-source binary using crash detection. It is based upon frida_executable_libpng and baby_fuzzer.
 
-Current version is single-process.
+Supports multi-core execution with restart.
 
 It has been tested on Windows.
 
@@ -19,8 +19,11 @@ Copy the fuzzer to the current directory: `copy /Y target\release\frida_simple_e
 ## Run
 `python frida_inject.py test.exe -H test.exe`
 
-To run on multiple CPUs run:
+To run on multiple CPUs use -c option, you can specify the list or cores to use or just `all`:
 `python frida_inject.py test.exe -H test.exe -c 0,1,2,3`
+
+To restart the fuzzer after the certain number of iterations use -I option:
+`python frida_inject.py test.exe -H test.exe -I 10000`
 
 Fuzzing starts when the *trigger function* is called by the application. In future, we may add
 an explicit API call to start fuzzing. The trigger function should be chosen wisely, so that

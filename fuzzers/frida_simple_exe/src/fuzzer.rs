@@ -9,7 +9,7 @@ use std::{path::PathBuf};
 use frida_gum::Gum;
 use libafl::{
     corpus::{CachedOnDiskCorpus, Corpus, OnDiskCorpus},
-    events::{SimpleEventManager, launcher::Launcher, llmp::LlmpRestartingEventManager, EventConfig},
+    events::{SimpleEventManager, launcher::Launcher, llmp::LlmpRestartingEventManager, EventConfig, EventRestarter},
     executors::{inprocess::InProcessExecutor, ExitKind},
     feedback_or, feedback_or_fast,
     feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback, TimeoutFeedback},
@@ -48,6 +48,8 @@ use libafl_frida::{
     helper::FridaInstrumentationHelper,
 };
 use std::ffi::{c_char};
+
+use crate::log;
 
 pub unsafe fn lib(target_fuzz: extern "C" fn(*const c_char, u32) -> ()) {
     color_backtrace::install();
@@ -180,7 +182,23 @@ unsafe fn fuzz(
 
             let mut stages = tuple_list!(StdMutationalStage::new(mutator));
 
-            fuzzer.fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)?;
+            // If the number of iterations was provided, call fuzz_loop_iterations
+            // otherwise call fuzz_loop indefinitely
+            log(format!("Starting the fuzzer on core {:?} for {} iterations\n",
+             core_id, options.iterations).as_str());
+            if options.iterations > 0 {
+                fuzzer.fuzz_loop_for(
+                    &mut stages,
+                    &mut executor,
+                    &mut state,
+                    &mut mgr,
+                    options.iterations.try_into().unwrap(),
+                )?;
+                mgr.on_restart(&mut state)?;
+                log("Restarting the fuzzer");
+            } else {
+                fuzzer.fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)?;
+            }
 
             Ok(())
         })(state, mgr, core_id)
