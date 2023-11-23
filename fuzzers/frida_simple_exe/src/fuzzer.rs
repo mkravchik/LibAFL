@@ -12,7 +12,7 @@ use libafl::{
     events::{SimpleEventManager, launcher::Launcher, llmp::LlmpRestartingEventManager, EventConfig, EventRestarter},
     executors::{inprocess::InProcessExecutor, ExitKind},
     feedback_or, feedback_or_fast,
-    feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback, TimeoutFeedback},
+    feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback, TimeoutFeedback, NewHashFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
     generators::RandPrintablesGenerator,
     inputs::{BytesInput, HasTargetBytes},
@@ -21,11 +21,11 @@ use libafl::{
         scheduled::{havoc_mutations, StdScheduledMutator},
         // token_mutations::{I2SRandReplace, Tokens},
     },
-    observers::{HitcountsMapObserver, StdMapObserver, TimeObserver},
+    observers::{HitcountsMapObserver, StdMapObserver, TimeObserver, BacktraceObserver},
     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
     stages::{StdMutationalStage},
     state::{HasCorpus, StdState},
-    Error,    
+    Error, feedback_and,    
 };
 #[cfg(unix)]
 use libafl::{feedback_and_fast, feedbacks::ConstFeedback};
@@ -47,9 +47,9 @@ use libafl_frida::{
     executor::FridaInProcessExecutor,
     helper::FridaInstrumentationHelper,
 };
-use std::ffi::{c_char};
+use std::ffi::c_char;
 
-use crate::log;
+use log::info;
 
 pub unsafe fn lib(target_fuzz: extern "C" fn(*const c_char, u32) -> ()) {
     color_backtrace::install();
@@ -116,8 +116,20 @@ unsafe fn fuzz(
                 TimeFeedback::with_observer(&time_observer)
             );
 
+            let mut bt = None;
+            let bt_observer = BacktraceObserver::new(
+                "BacktraceObserver",
+                &mut bt,
+                libafl::observers::HarnessType::InProcess,
+            );
+        
+            // A feedback to choose if an input is a solution or not
             #[cfg(windows)]
-            let mut objective = feedback_or_fast!(CrashFeedback::new(), TimeoutFeedback::new());
+            // let mut objective = feedback_or_fast!(CrashFeedback::new(), TimeoutFeedback::new());
+            let mut objective = 
+                feedback_or_fast!(TimeoutFeedback::new(),
+                feedback_and!(CrashFeedback::new(), NewHashFeedback::new(&bt_observer))
+            );
 
             // If not restarting, create a State from scratch
             let mut state = state.unwrap_or_else(|| {
@@ -125,7 +137,7 @@ unsafe fn fuzz(
                     // RNG
                     StdRand::with_seed(current_nanos()),
                     // Corpus that will be evolved, we keep it in memory for performance
-                    CachedOnDiskCorpus::no_meta(PathBuf::from("./corpus_discovered"), 64)
+                    CachedOnDiskCorpus::new(PathBuf::from("./corpus_discovered"), 64)
                         .unwrap(),
                     // Corpus in which we store solutions (crashes in this example),
                     // on disk so the user can get them after stopping the fuzzer
@@ -148,7 +160,7 @@ unsafe fn fuzz(
             let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
 
             #[cfg(windows)]
-            let observers = tuple_list!(edges_observer, time_observer,);
+            let observers = tuple_list!(edges_observer, time_observer, bt_observer);
 
             // Create the executor for an in-process function with just one observer for edge coverage
             let mut executor = FridaInProcessExecutor::new(
@@ -184,8 +196,9 @@ unsafe fn fuzz(
 
             // If the number of iterations was provided, call fuzz_loop_iterations
             // otherwise call fuzz_loop indefinitely
-            log(format!("Starting the fuzzer on core {:?} for {} iterations\n",
-             core_id, options.iterations).as_str());
+            info!( "{}: Starting the fuzzer on core {:?} for {} iterations\n",
+                std::process::id().to_string(), 
+                core_id, options.iterations);
             if options.iterations > 0 {
                 fuzzer.fuzz_loop_for(
                     &mut stages,
@@ -195,7 +208,7 @@ unsafe fn fuzz(
                     options.iterations.try_into().unwrap(),
                 )?;
                 mgr.on_restart(&mut state)?;
-                log("Restarting the fuzzer");
+                info!( "{}: Restarting the fuzzer", std::process::id().to_string());
             } else {
                 fuzzer.fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)?;
             }

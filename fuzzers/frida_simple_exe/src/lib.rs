@@ -19,6 +19,27 @@ use lazy_static::lazy_static;
 use std::cell::UnsafeCell;
 use std::sync::Mutex;
 use std::env;
+use log::{
+    Record, Level, Metadata, LevelFilter, SetLoggerError,
+    info, warn
+};
+
+struct StderrLogger;
+
+impl log::Log for StderrLogger {
+    fn enabled(&self, metadata: &Metadata) -> bool {
+        metadata.level() <= Level::Info
+    }
+
+    fn log(&self, record: &Record) {
+        if self.enabled(record.metadata()) {
+            eprintln!("{} - {}", record.level(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
 mod fuzzer;
 
 lazy_static! {
@@ -31,7 +52,7 @@ lazy_static! {
         Mutex::new(UnsafeCell::new(None));
     static ref ORIGINAL_CREATE_PROCESS: Mutex<UnsafeCell<Option<CreateProcessWFunc>>> =
         Mutex::new(UnsafeCell::new(None));
-}
+    }
 
 type EntryPoint = extern "C" fn() -> ();
 type MainFunc = extern "C" fn(i32, *const *const u8, *const *const u8) -> i32;
@@ -94,13 +115,14 @@ pub fn write_to_file(message: &str, file_path: &str) {
     }
 }
 
-pub fn log(message: &str) {
-    write_to_console(message);
-    //Append the PID to the log file name
-    let pid = std::process::id();
-    let log_file_name = format!("log_{}.txt", pid);
-    write_to_file(message, &log_file_name);
-}
+// Replacing with proper Rust logging
+// pub fn log(message: &str) {
+//     write_to_console(message);
+//     //Append the PID to the log file name
+//     let pid = std::process::id();
+//     let log_file_name = format!("log_{}.txt", pid);
+//     write_to_file(message, &log_file_name);
+// }
 
 #[allow(non_snake_case)]
 #[cfg(windows)]
@@ -110,10 +132,17 @@ pub extern "system" fn DllMain(
     fdw_reason: winapi::shared::minwindef::DWORD,
     _lpv_reserved: winapi::shared::minwindef::LPVOID,
 ) -> winapi::shared::minwindef::BOOL {
-    log(format!("fdw_reason: {}\n", fdw_reason).as_str());
+    info!("{}: DllMain fdw_reason: {}", std::process::id().to_string(), fdw_reason.to_string());
     match fdw_reason {
         winapi::um::winnt::DLL_PROCESS_ATTACH => {
-            log("DLL_PROCESS_ATTACH\n");
+            // Initialize a logger so that all messages created by LibAFL 
+            // will be printed to stderr
+            log::set_boxed_logger(Box::new(StderrLogger))
+            .map(|()| log::set_max_level(LevelFilter::Info))
+            .expect("Failed to set logger");
+
+
+            info!("{}: DLL_PROCESS_ATTACH", std::process::id().to_string(),);
 
             hook_trigger_func();
 
@@ -122,21 +151,21 @@ pub extern "system" fn DllMain(
                 "CreateProcessW");
             let create_process = create_process.unwrap();
             if !create_process.is_null() {
-                log(format!("CreateProcessW addr: {:p}\n", create_process.0).as_str());
+                info!("{}: CreateProcessW addr: {:p}", std::process::id().to_string(), create_process.0);
                 set_create_process_hook(create_process);
             }
         }
         winapi::um::winnt::DLL_PROCESS_DETACH => {
-            log("DLL_PROCESS_DETACH\n");
+            info!("{}: DLL_PROCESS_DETACH", std::process::id().to_string());
         }
         winapi::um::winnt::DLL_THREAD_ATTACH => {
-            log("DLL_THREAD_ATTACH\n");
+            info!("{}: DLL_THREAD_ATTACH", std::process::id().to_string());
         }
         winapi::um::winnt::DLL_THREAD_DETACH => {
-            log("DLL_THREAD_DETACH\n");
+            info!("{}: DLL_THREAD_DETACH", std::process::id().to_string());
         }
         _ => {
-            log("Unknown reason\n");
+            info!("{}: Unknown reason", std::process::id().to_string());
         }
     }
     true as winapi::shared::minwindef::BOOL
@@ -157,24 +186,22 @@ pub extern "system" fn DllMain(
 /// as specified in the FUZZ_TRIGGER environment variable after the @ sign
 /// If the offset is not provided, the function must be exported
 fn hook_trigger_func() -> () {
-    log("hook_trigger_func called!\n");
+    info!("{}: hook_trigger_func called!", std::process::id().to_string());
     let trigger_func = env::var("FUZZ_TRIGGER").unwrap_or_else(|_| "entry_point".to_owned());
-    log(format!("FUZZ_TRIGGER: {}\n", trigger_func).as_str());
+    info!("{}: FUZZ_TRIGGER: {}", std::process::id().to_string(), trigger_func);
     let trigger_func_offset = trigger_func.find("@");
     let trigger_func_name = match trigger_func_offset {
         Some(offset) => &trigger_func[..offset],
         None => &trigger_func[..]
     };
-    log(format!("trigger_func_name: {}\n", trigger_func_name).as_str());
     let trigger_func_offset = match trigger_func_offset {
         Some(offset) => {
             let offset_str = &trigger_func[offset+1..];
-            log(format!("offset_str: {}\n", offset_str).as_str());
             let offset = u64::from_str_radix(offset_str, 16);
             match offset {
                 Ok(offset) => offset,
                 Err(e) => {
-                    log(format!("Failed to parse offset: {}\n", e).as_str());
+                    warn!( "{}: Failed to parse offset: {}", std::process::id().to_string(), e);
                     0
                 }
             }
@@ -184,7 +211,7 @@ fn hook_trigger_func() -> () {
     // Now call the appropriate set_XXX_hook function based on the trigger_func_name
     let exe_base = Module::find_base_address("test.exe");
     if exe_base.is_null(){
-        log("Failed to get the exe's base address\n");
+        warn!("{}: Failed to get the exe's base address", std::process::id().to_string());
     }
     match trigger_func_name {
         "entry_point" => {
@@ -206,7 +233,7 @@ fn hook_trigger_func() -> () {
                 );
                 let func = func.unwrap();
                 if !func.is_null() {
-                    // log(format!("main addr: {:?}\n", main).as_str());
+                    // log(format!("main addr: {:?}", std::process::id().to_string(), main).as_str());
                     // set_fuzz_hook(func);
                     set_main_hook(NativePointer((func.0 as u64 + trigger_func_offset) as *mut c_void));
                 }
@@ -225,7 +252,7 @@ fn hook_trigger_func() -> () {
                 );
                 let func = func.unwrap();
                 if !func.is_null() {
-                    log(format!("{} addr: {:p}\n", trigger_func_name, func.0).as_str());
+                    info!("{}: {} addr: {:p}", std::process::id().to_string(), trigger_func_name, func.0);
                     set_fuzz_hook(func);
                 }
             }
@@ -237,7 +264,7 @@ fn hook_trigger_func() -> () {
 #[no_mangle]
 pub fn entry_point_hook(
 ) -> () {
-    log("entry_point_hook called!\n");
+    info!("{}: entry_point_hook called!", std::process::id().to_string());
 
     unsafe{
         start_fuzzing();
@@ -274,7 +301,7 @@ fn set_entry_point_hook(exe_base_addr_ptr: NativePointer) -> i32 {
     let module_base = exe_base_addr_ptr.0 as *const u8;
     
     //Print the pointer's value as string
-    log(format!("set_entry_point_hook got the addr: {:p}\n", module_base).as_str());
+    info!("{}: set_entry_point_hook got the addr: {:p}", std::process::id().to_string(), module_base);
     let mut entry_point_address : *const u8 = null_mut();
 
     unsafe{
@@ -294,7 +321,7 @@ fn set_entry_point_hook(exe_base_addr_ptr: NativePointer) -> i32 {
         entry_point_address = module_base.offset(nt_headers.OptionalHeader.AddressOfEntryPoint as isize);
     }
 
-    log(format!("Exe entrypoint at: {:p}\n", entry_point_address as *const c_void).as_str());
+    info!("{}: Exe entrypoint at: {:p}", std::process::id().to_string(), entry_point_address as *const c_void);
 
     let result = Interceptor::obtain(&GUM).replace(
         NativePointer(entry_point_address as *mut c_void),
@@ -304,7 +331,7 @@ fn set_entry_point_hook(exe_base_addr_ptr: NativePointer) -> i32 {
 
     match result {
         Ok(org_fn) => {
-            log("Successfully replaced Exe entry point\n");
+            info!("{}: Successfully replaced Exe entry point", std::process::id().to_string());
             unsafe{
                 *ORIGINAL_ENTRY_POINT.lock().unwrap().get_mut() = 
                     Some(std::mem::transmute(org_fn));
@@ -312,7 +339,7 @@ fn set_entry_point_hook(exe_base_addr_ptr: NativePointer) -> i32 {
             0
         },
         Err(e) => {
-            log(format!("Failed to replace Exe entry point: {}\n", e).as_str());
+            warn!( "{}: Failed to replace Exe entry point: {}", std::process::id().to_string(), e);
             -1
         }
     }
@@ -323,7 +350,7 @@ fn set_create_process_hook(create_proc_addr_ptr: NativePointer) -> i32 {
     let create_proc_addr_raw: *mut c_void = create_proc_addr_ptr.0;
     
     //Print the pointer's value as string
-    log(format!("set_create_proc_hook got the addr: {:p}\n", create_proc_addr_raw).as_str());
+    info!("{}: set_create_proc_hook got the addr: {:p}", std::process::id().to_string(), create_proc_addr_raw);
 
     let result = Interceptor::obtain(&GUM).replace(
         create_proc_addr_ptr,
@@ -333,7 +360,7 @@ fn set_create_process_hook(create_proc_addr_ptr: NativePointer) -> i32 {
 
     match result {
         Ok(org_create_proc) => {
-            log("Successfully replaced create_proc function\n");
+            info!("{}: Successfully replaced create_proc function", std::process::id().to_string());
             unsafe{
                 *ORIGINAL_CREATE_PROCESS.lock().unwrap().get_mut() = 
                     Some(std::mem::transmute(org_create_proc));
@@ -341,7 +368,7 @@ fn set_create_process_hook(create_proc_addr_ptr: NativePointer) -> i32 {
             0
         },
         Err(e) => {
-            log(format!("Failed to replace create_proc function: {}\n", e).as_str());
+            warn!( "{}: Failed to replace create_proc function: {}", std::process::id().to_string(), e);
             -1
         }
     }
@@ -359,7 +386,7 @@ unsafe extern "C" fn create_process_detour(
     lp_startup_info: *mut c_void,
     lp_process_information: *mut c_void,
 ) -> winapi::shared::minwindef::BOOL {
-    log("create_process_detour called!\n");
+    info!("{}: create_process_detour called!", std::process::id().to_string());
 
     // Change the flag so the process is created in a suspended state
     let dw_creation_flags = dw_creation_flags | winapi::um::winbase::CREATE_SUSPENDED;
@@ -382,13 +409,13 @@ unsafe extern "C" fn create_process_detour(
                 lp_process_information,
             );
     if result == 0 {
-        log(format!("CreateProcessW failed: {}\n", winapi::um::errhandlingapi::GetLastError()).as_str());
+        warn!( "{}: CreateProcessW failed: {}", std::process::id().to_string(), winapi::um::errhandlingapi::GetLastError());
         return result;
     }
     
     //Get the PID of the new process from the PROCESS_INFORMATION struct
     let process_info: &PROCESS_INFORMATION =  &*(lp_process_information as *mut PROCESS_INFORMATION);
-    log(format!("CreateProcessW succeeded! PID: {}\n", process_info.dwProcessId).as_str());
+    info!("{}: CreateProcessW succeeded! PID: {}", std::process::id().to_string(), process_info.dwProcessId);
 
     // Get the process handle
     let process_handle = *(lp_process_information as *mut HANDLE);
@@ -407,38 +434,33 @@ unsafe extern "C" fn create_process_detour(
         PAGE_READWRITE,
     );
     if p_memory.is_null() {
-        log(format!("VirtualAllocEx failed: {}\n", winapi::um::errhandlingapi::GetLastError()).as_str());
+        warn!( "{}: VirtualAllocEx failed: {}", std::process::id().to_string(), winapi::um::errhandlingapi::GetLastError());
     }
     else{
-        log(format!("p_memory: {:p}\n", p_memory).as_str());
-
         if WriteProcessMemory(process_handle, p_memory, module_name.as_ptr() as *const _,
              process_name_len, null_mut()) == 0 {
             VirtualFreeEx(process_handle, p_memory, 0, MEM_RELEASE);
         }
         else{
-            log("WriteProcessMemory succeeded!\n");
-
             // // Sleep for 1 minute to allow for attaching the debugger
             // std::thread::sleep(std::time::Duration::from_secs(60));
 
             let load_library = Module::find_export_by_name(Some("kernel32.dll"),
                 "LoadLibraryA");
             let load_library = load_library.unwrap();
-            log(format!("LoadLibraryA addr: {:p}\n", load_library.0).as_str());
+            info!("{}: LoadLibraryA addr: {:p}", std::process::id().to_string(), load_library.0);
 
             let h_thread = CreateRemoteThread(process_handle, null_mut(), 0,
                 Some(std::mem::transmute::<_, unsafe extern "system" fn(*mut c_void) -> u32>(load_library.0 as *const ())),
                 p_memory, 0, null_mut());
             if h_thread.is_null() {
                 VirtualFreeEx(process_handle, p_memory, 0, MEM_RELEASE);
-                log("Failed to create remote thread");
+                warn!( "{}: Failed to create remote thread", std::process::id().to_string());
             }
             else {
-                log("CreateRemoteThread succeeded!\n");
                 // Wait for the remote thread to complete, omitted for brevity
                 winapi::um::synchapi::WaitForSingleObject(h_thread, winapi::um::winbase::INFINITE);
-                log("Library should be injected by now!\n");
+                info!("{}: Library should be injected by now!", std::process::id().to_string());
                 CloseHandle(h_thread);
                 VirtualFreeEx(process_handle, p_memory, 0, MEM_RELEASE);
             }
@@ -446,11 +468,11 @@ unsafe extern "C" fn create_process_detour(
     }
     // Resume the process
     if winapi::um::processthreadsapi::ResumeThread(process_info.hThread) == winapi::shared::minwindef::DWORD::MAX {
-        log(format!("ResumeThread failed: {}\n", winapi::um::errhandlingapi::GetLastError()).as_str());
+        warn!( "{}: ResumeThread failed: {}", std::process::id().to_string(), winapi::um::errhandlingapi::GetLastError());
         return 0;
     }
     else{
-        log("ResumeThread succeeded!\n");
+        info!("{}: ResumeThread succeeded!", std::process::id().to_string());
         return result;
     }
 }
@@ -461,11 +483,11 @@ pub unsafe extern "C" fn rust_main_hook(
     argv: *const *const u8,
     _env: *const *const u8,
 ) -> i32 {
-    log(format!("rust_main_hook called! argc {:?}\n", argc).as_str());
+    info!("{}: rust_main_hook called! argc {:?}", std::process::id().to_string(), argc);
     //Log all the arguments
     for i in 0..argc {
         let arg = std::ffi::CStr::from_ptr(*argv.offset(i as isize) as *const c_char).to_str().unwrap();
-        log(format!("arg[{}]: {}\n", i, arg).as_str());
+        info!("{}: arg[{}]: {}", std::process::id().to_string(), i, arg);
     }
 
     start_fuzzing();
@@ -487,9 +509,9 @@ pub unsafe extern "C" fn rust_fuzz_hook(
     sample_size: u32
 ) -> () {
 
-    log(format!("rust_fuzz_hook called! {:p} {}\n",
+    info!("{}: rust_fuzz_hook called! {:p} {}", std::process::id().to_string(),
         // std::ffi::CStr::from_ptr(sample_bytes).to_str().unwrap()).as_str()
-        sample_bytes, sample_size).as_str()
+        sample_bytes, sample_size
     );
     
     start_fuzzing()
@@ -509,7 +531,7 @@ pub extern "C" fn set_fuzz_hook(fuzz_addr_ptr: NativePointer) -> i32 {
     let fuzz_addr_raw: *mut c_void = fuzz_addr_ptr.0;
     
     //Print the pointer's value as string
-    log(format!("set_fuzz_hook got the addr: {:p}\n", fuzz_addr_raw).as_str());
+    info!("{}: set_fuzz_hook got the addr: {:p}", std::process::id().to_string(), fuzz_addr_raw);
 
     let result = Interceptor::obtain(&GUM).replace(
         fuzz_addr_ptr,
@@ -519,14 +541,14 @@ pub extern "C" fn set_fuzz_hook(fuzz_addr_ptr: NativePointer) -> i32 {
 
     match result {
         Ok(org_fuzz) => {
-            log("Successfully replaced fuzz function\n");
+            info!("{}: Successfully replaced fuzz function", std::process::id().to_string());
             unsafe{
                 *ORIGINAL_FUZZ.lock().unwrap().get_mut() = Some(std::mem::transmute(org_fuzz));
             }
             0
         },
         Err(e) => {
-            log(format!("Failed to replace fuzz function: {}\n", e).as_str());
+            warn!( "{}: Failed to replace fuzz function: {}", std::process::id().to_string(), e);
             -1
         }
     }
@@ -540,7 +562,7 @@ pub extern "C" fn set_main_hook(main_addr_ptr: NativePointer) -> i32 {
     let main_addr_raw: *mut c_void = main_addr_ptr.0;
     
     //Print the pointer's value as string
-    log(format!("set_main_hook got the addr: {:p}\n", main_addr_raw).as_str());
+    info!("{}: set_main_hook got the addr: {:p}", std::process::id().to_string(), main_addr_raw);
 
     let result = Interceptor::obtain(&GUM).replace(
         main_addr_ptr,
@@ -550,14 +572,14 @@ pub extern "C" fn set_main_hook(main_addr_ptr: NativePointer) -> i32 {
 
     match result {
         Ok(org_main) => {
-            log("Successfully replaced main function\n");
+            info!("{}: Successfully replaced main function", std::process::id().to_string());
             unsafe{
                 *ORIGINAL_MAIN.lock().unwrap().get_mut() = Some(std::mem::transmute(org_main));
             }
             0
         },
         Err(e) => {
-            log(format!("Failed to replace main function: {}\n", e).as_str());
+            warn!( "{}: Failed to replace main function: {}", std::process::id().to_string(), e);
             -1
         }
     }
