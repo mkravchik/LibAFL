@@ -109,20 +109,22 @@ extern "C" void FUZZ_TARGET_MODIFIERS fuzz_internal(
   if (sample_size >= 4) {
     // check if the sample spells "test", but do it char-by-char to guide the fuzzer
     if (sample_bytes[0] == 't') {
-      // make it a bit harder for the fuzzer
-      if (*(uint32_t *)(sample_bytes) == 0x74736574) {
-        printf("Found test. Going to crash.\n");
-        // if so, crash
-        crash[0] = 1;
+      if (sample_bytes[1] == 'e') {
+        // make it a bit harder for the fuzzer
+        if (*(uint32_t *)(sample_bytes) == 0x74736574) {
+          printf("Found test. Going to crash.\n");
+          // if so, crash
+          crash[0] = 1;
+        }
       }
       // if (sample_bytes[1] == 'e') {
-        // if (sample_bytes[2] == 's') {
-        //   if (sample_bytes[3] == 't') {
-        //     printf("Found test. Going to crash.\n");
-        //     // if so, crash
-        //     crash[0] = 1;
-        //   }
-        // }
+      //   if (sample_bytes[2] == 's') {
+      //     if (sample_bytes[3] == 't') {
+      //       printf("Found test. Going to crash.\n");
+      //       // if so, crash
+      //       crash[0] = 1;
+      //     }
+      //   }
       // }
     }
   }
