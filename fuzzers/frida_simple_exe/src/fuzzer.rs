@@ -1,30 +1,33 @@
 //! A libfuzzer-like fuzzer with llmp-multithreading support and restarts
 //! The example harness is built for libpng.
+use backtrace::Backtrace;
 use mimalloc::MiMalloc;
+use serde::{Deserialize, Serialize, Serializer, de::{self, Visitor}, Deserializer};
+
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-use std::{path::PathBuf};
+use std::{path::PathBuf, fmt};
 
 use frida_gum::Gum;
 use libafl::{
-    corpus::{CachedOnDiskCorpus, Corpus, OnDiskCorpus},
-    events::{SimpleEventManager, launcher::Launcher, llmp::LlmpRestartingEventManager, EventConfig, EventRestarter},
+    corpus::{CachedOnDiskCorpus, Corpus, OnDiskCorpus, Testcase},
+    events::{SimpleEventManager, launcher::Launcher, llmp::LlmpRestartingEventManager, EventConfig, EventRestarter, EventFirer},
     executors::{inprocess::InProcessExecutor, ExitKind},
     feedback_or, feedback_or_fast,
-    feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback, TimeoutFeedback, NewHashFeedback},
+    feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback, TimeoutFeedback, NewHashFeedback, Feedback, HasObserverName},
     fuzzer::{Fuzzer, StdFuzzer},
     generators::RandPrintablesGenerator,
-    inputs::{BytesInput, HasTargetBytes},
+    inputs::{BytesInput, HasTargetBytes, UsesInput},
     monitors::{SimpleMonitor, MultiMonitor},
     mutators::{
         scheduled::{havoc_mutations, StdScheduledMutator},
         // token_mutations::{I2SRandReplace, Tokens},
     },
-    observers::{HitcountsMapObserver, StdMapObserver, TimeObserver, BacktraceObserver},
+    observers::{HitcountsMapObserver, StdMapObserver, TimeObserver, BacktraceObserver, ObserverWithHashField, ObserversTuple, HarnessType, Observer},
     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
     stages::{StdMutationalStage},
-    state::{HasCorpus, StdState},
+    state::{HasCorpus, StdState, HasNamedMetadata, HasClientPerfMonitor, HasMetadata},
     Error, feedback_and,    
 };
 #[cfg(unix)]
@@ -35,7 +38,7 @@ use libafl_bolts::{
     rands::StdRand,
     shmem::{ShMemProvider, StdShMemProvider},
     tuples::{tuple_list},
-    AsSlice,
+    AsSlice, Named, impl_serdeany,
 };
 #[cfg(unix)]
 use libafl_frida::asan::{
@@ -49,8 +52,262 @@ use libafl_frida::{
 };
 use std::ffi::c_char;
 
-use log::info;
+use log::{info, warn};
 
+/// BacktraceMetadata
+/// If we use out-of-the-bix implementations for Serialize and Deserialize,
+/// The stack is printed in decimal. Leave it if it is OK with you.
+/// The custome serialization below shows how to serialize in hex
+#[derive(Debug)]
+pub struct BacktraceMetadata(Backtrace);
+
+impl Serialize for BacktraceMetadata {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let frames = self.0.frames();
+        let hex_frames: Vec<String> = frames
+            .iter()
+            .map(|frame| 
+                {
+                    let base_address = frame.module_base_address()
+                        .map(|addr| format!("{:?}", addr))
+                        .unwrap_or_else(|| "unknown".to_string());
+                    format!("base {} ip {:?}", base_address, frame.ip())
+                })
+            .collect();
+        let hex_string = hex_frames.join(", ");
+        serializer.serialize_str(&hex_string)
+    }
+}
+
+// The implementation below is not correct, as it does not actually parses 
+// The string and creates frames out of it.
+// However, I don't think this function is needed.
+// BUT, whithout it, I get weird crashes.
+struct BacktraceMetadataVisitor;
+
+impl<'de> Visitor<'de> for BacktraceMetadataVisitor {
+    type Value = BacktraceMetadata;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("a string representing a Backtrace")
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        // Here you need to convert the string back to a Backtrace.
+        // This is a placeholder implementation.
+        Ok(BacktraceMetadata(Backtrace::new()))
+    }
+}
+
+impl<'de> Deserialize<'de> for BacktraceMetadata {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_str(BacktraceMetadataVisitor)
+    }
+}
+// TODO - Can I implement Deserialize for this? I don't think i need it though
+impl_serdeany!(BacktraceMetadata);
+
+/// My custom backtrace observer wrapping BacktraceObserver
+/// Keeps the backtrace and returns it to the Feedback
+/// I guess I need to create a special trate for this functionality
+/// I did not find any more elegant way of implementing this
+
+#[allow(clippy::unsafe_derive_deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
+pub struct BacktraceObserverWithStack<'a> {
+    inner: BacktraceObserver<'a> ,
+    harness_type: HarnessType,
+    b: Option<Backtrace>,
+}
+
+impl<'a> BacktraceObserverWithStack<'a> {
+    /// Creates a new [`BacktraceObserverWithStack`] with the given name.
+    #[must_use]
+    pub fn new(
+        observer_name: &str,
+        backtrace_hash: &'a mut Option<u64>,
+        harness_type: HarnessType,
+    ) -> Self {
+        Self {
+            inner: BacktraceObserver::new(observer_name, backtrace_hash, harness_type.clone()),
+            harness_type: harness_type,
+            b: None
+        }
+    }
+
+    //add a method that returns the backtrace
+    pub fn get_backtrace(&self) -> Option<&Backtrace> {
+        self.b.as_ref()
+    }
+}
+
+impl<'a> ObserverWithHashField for BacktraceObserverWithStack<'a> {
+    /// Gets the hash value of this observer.
+    #[must_use]
+    fn hash(&self) -> Option<u64> {
+        self.inner.hash()
+    }
+}
+
+impl<'a, S> Observer<S> for BacktraceObserverWithStack<'a>
+where
+    S: UsesInput,
+{
+    fn post_exec(
+        &mut self,
+        state: &mut S,
+        input: &S::Input,
+        exit_kind: &ExitKind,
+    ) -> Result<(), Error> {
+        self.inner.post_exec(state, input, exit_kind)?;
+
+        // Rest of your code...
+        if self.harness_type == HarnessType::InProcess {
+            if *exit_kind == ExitKind::Crash {
+                self.b = Some(Backtrace::new_unresolved());
+            } else {
+                self.b = None;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn post_exec_child(
+        &mut self,
+        _state: &mut S,
+        _input: &S::Input,
+        exit_kind: &ExitKind,
+    ) -> Result<(), Error> {
+        self.inner.post_exec_child(_state, _input, exit_kind)?;
+        if self.harness_type == HarnessType::Child {
+            if *exit_kind == ExitKind::Crash {
+                self.b = Some(Backtrace::new_unresolved());
+            } else {
+                self.b = None;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<'a> Named for BacktraceObserverWithStack<'a> {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+}
+
+/// 
+/// My custom feedback wrapping NewHashFeedback
+/// I did not find any more elegant way of implementing this
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct NewHashFeedbackWithStack<O, S> (NewHashFeedback<O, S>);
+
+impl<O, S> Feedback<S> for NewHashFeedbackWithStack<O, S>
+where
+    O: ObserverWithHashField + Named,
+    S: UsesInput + HasNamedMetadata + HasClientPerfMonitor,
+{
+    fn init_state(&mut self, state: &mut S) -> Result<(), Error> {
+        self.0.init_state(state)
+    }
+
+    #[allow(clippy::wrong_self_convention)]
+    fn is_interesting<EM, OT>(
+        &mut self,
+        state: &mut S,
+        _manager: &mut EM,
+        _input: &<S as UsesInput>::Input,
+        observers: &OT,
+        _exit_kind: &ExitKind,
+    ) -> Result<bool, Error>
+    where
+        EM: EventFirer<State = S>,
+        OT: ObserversTuple<S>,
+    {
+        //Delegate to the self.0
+        self.0.is_interesting(state, _manager, _input, observers, _exit_kind)
+    }
+
+    fn append_metadata<OT>(
+        &mut self,
+        _state: &mut S,
+        observers: &OT,
+        testcase: &mut Testcase<S::Input>,
+    ) -> Result<(), Error>
+    where
+        OT: ObserversTuple<S>,
+    {
+        info!( "{}: append_metadata called!", 
+            std::process::id().to_string());
+        let observer = observers
+            .match_name::<BacktraceObserverWithStack>(&self.0.observer_name())
+            .expect("A NewHashFeedbackWithStack needs a BacktraceObserverWithStack");
+
+        match observer.get_backtrace(){
+            // Performance problem here!
+            Some(b)=>testcase.add_metadata(BacktraceMetadata(b.clone())),
+            None=>warn!{"{}: append_metadata did not find backtrace!", 
+                std::process::id().to_string()},
+        }
+        
+
+
+        Ok(())
+    }
+    
+}
+
+impl<O, S> Named for NewHashFeedbackWithStack<O, S> {
+    #[inline]
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+}
+
+impl<O, S> HasObserverName for NewHashFeedbackWithStack<O, S> {
+    #[inline]
+    fn observer_name(&self) -> &str {
+        self.0.observer_name()
+    }
+}
+
+impl<O, S> NewHashFeedbackWithStack<O, S>
+where
+    O: ObserverWithHashField + Named,
+{
+    /// Returns a new [`NewHashFeedbackWithStack`].
+    /// Setting an observer name that doesn't exist would eventually trigger a panic.
+    #[must_use]
+    pub fn with_names(name: &str, observer_name: &str) -> Self {
+        Self(NewHashFeedback::with_names(name, observer_name))
+    }
+
+    /// Returns a new [`NewHashFeedbackWithStack`].
+    #[must_use]
+    pub fn new(observer: &O) -> Self {
+        Self(NewHashFeedback::new(observer))
+    }
+
+    /// Returns a new [`NewHashFeedback`] that will create a hash set with the
+    /// given initial capacity.
+    #[must_use]
+    pub fn with_capacity(observer: &O, capacity: usize) -> Self {
+        Self(NewHashFeedback::with_capacity(observer, capacity))
+    }
+}
+
+
+/////////////////////////////////////////////////////////////
 pub unsafe fn lib(target_fuzz: extern "C" fn(*const c_char, u32) -> ()) {
     color_backtrace::install();
 
@@ -117,8 +374,8 @@ unsafe fn fuzz(
             );
 
             let mut bt = None;
-            let bt_observer = BacktraceObserver::new(
-                "BacktraceObserver",
+            let bt_observer = BacktraceObserverWithStack::new(
+                "BacktraceObserver",//TODO - change?
                 &mut bt,
                 libafl::observers::HarnessType::InProcess,
             );
@@ -128,7 +385,7 @@ unsafe fn fuzz(
             // let mut objective = feedback_or_fast!(CrashFeedback::new(), TimeoutFeedback::new());
             let mut objective = 
                 feedback_or_fast!(TimeoutFeedback::new(),
-                feedback_and!(CrashFeedback::new(), NewHashFeedback::new(&bt_observer))
+                feedback_and!(CrashFeedback::new(), NewHashFeedbackWithStack::new(&bt_observer))
             );
 
             // If not restarting, create a State from scratch
