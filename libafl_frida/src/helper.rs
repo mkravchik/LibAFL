@@ -22,7 +22,7 @@ use libafl::{
     Error,
 };
 use libafl_bolts::{cli::FuzzerOptions, tuples::MatchFirstType};
-#[cfg(unix)]
+// #[cfg(unix)]
 use libafl_targets::drcov::DrCovBasicBlock;
 #[cfg(unix)]
 use nix::sys::mman::{mmap, MapFlags, ProtFlags};
@@ -30,9 +30,9 @@ use rangemap::RangeMap;
 
 #[cfg(all(feature = "cmplog", target_arch = "aarch64"))]
 use crate::cmplog_rt::CmpLogRuntime;
-use crate::coverage_rt::CoverageRuntime;
+use crate::{coverage_rt::CoverageRuntime, drcov_rt::DrCovRuntime};
 #[cfg(unix)]
-use crate::{asan::asan_rt::AsanRuntime, drcov_rt::DrCovRuntime};
+use crate::{asan::asan_rt::AsanRuntime};
 
 #[cfg(target_vendor = "apple")]
 const ANONYMOUS_FLAG: MapFlags = MapFlags::MAP_ANON;
@@ -482,7 +482,7 @@ where
         let mut basic_block_size = 0;
         for instruction in basic_block {
             let instr = instruction.instr();
-            #[cfg(unix)]
+            // #[cfg(unix)]
             let instr_size = instr.bytes().len();
             let address = instr.address();
             // log::trace!("block @ {:x} transformed to {:x}", address, output.writer().pc());
@@ -500,7 +500,7 @@ where
                         rt.emit_coverage_mapping(address, output);
                     }
 
-                    #[cfg(unix)]
+                    // #[cfg(unix)]
                     if let Some(_rt) = runtimes.match_first_type_mut::<DrCovRuntime>() {
                         basic_block_start = address;
                     }
@@ -563,14 +563,14 @@ where
                     );
                 }
 
-                #[cfg(unix)]
+                // #[cfg(unix)]
                 if let Some(_rt) = runtimes.match_first_type_mut::<DrCovRuntime>() {
                     basic_block_size += instr_size;
                 }
             }
             instruction.keep();
         }
-        #[cfg(unix)]
+        // #[cfg(unix)]
         if basic_block_size != 0 {
             if let Some(rt) = runtimes.borrow_mut().match_first_type_mut::<DrCovRuntime>() {
                 log::trace!("{basic_block_start:#016X}:{basic_block_size:X}");
