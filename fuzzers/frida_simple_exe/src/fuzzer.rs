@@ -47,6 +47,7 @@ use libafl_frida::asan::{
 };
 use libafl_frida::{
     coverage_rt::{CoverageRuntime, MAP_SIZE},
+    drcov_rt::DrCovRuntime,
     executor::FridaInProcessExecutor,
     helper::FridaInstrumentationHelper,
 };
@@ -349,9 +350,10 @@ unsafe fn fuzz(
             let gum = Gum::obtain();
 
             let coverage = CoverageRuntime::new();
+            let drcov: DrCovRuntime = DrCovRuntime::new();
 
             let mut frida_helper =
-                FridaInstrumentationHelper::new(&gum, options, tuple_list!(coverage));
+                FridaInstrumentationHelper::new(&gum, options, tuple_list!(coverage, drcov));
 
             // Create an observation channel using the coverage map
             let edges_observer = HitcountsMapObserver::new(StdMapObserver::from_mut_ptr(

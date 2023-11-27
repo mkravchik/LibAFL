@@ -187,7 +187,7 @@ pub extern "system" fn DllMain(
 /// If the offset is not provided, the function must be exported
 fn hook_trigger_func() -> () {
     info!("{}: hook_trigger_func called!", std::process::id().to_string());
-    let trigger_func = env::var("FUZZ_TRIGGER").unwrap_or_else(|_| "entry_point".to_owned());
+    let trigger_func = env::var("FUZZ_TRIGGER").unwrap_or_else(|_| "main".to_owned());
     info!("{}: FUZZ_TRIGGER: {}", std::process::id().to_string(), trigger_func);
     let trigger_func_offset = trigger_func.find("@");
     let trigger_func_name = match trigger_func_offset {
