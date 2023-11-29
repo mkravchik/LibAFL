@@ -25,26 +25,26 @@ def on_detached(reason):
 device = frida.get_local_device()
 # pid = device.spawn(["test.exe", "-f", "test\\ok_input.txt"])
 pid = device.spawn(sys.argv[1:])
-session = device.attach(pid)
-session.on('detached', on_detached)
+# session = device.attach(pid)
+# session.on('detached', on_detached)
 
-# Read the Frida script
-with open("frida_inject.js", "r") as f:
-    script_code = f.read()
+# # Read the Frida script
+# with open("frida_inject.js", "r") as f:
+#     script_code = f.read()
 
-# Create the script
-script = session.create_script(script_code)
+# # Create the script
+# script = session.create_script(script_code)
 
-# Connect the message handler
-script.on('message', on_message)
+# # Connect the message handler
+# script.on('message', on_message)
 
-# Load the script
-script.load()
+# # Load the script
+# script.load()
 
-# Wait for the script to be fully loaded
-script_loaded_event.wait()
+# # Wait for the script to be fully loaded
+# script_loaded_event.wait()
 
-session.detach()
+# session.detach()
 
 # Sleep for 30 seconds to allow debugger to attach
 # print("Sleeping for 60 seconds...")

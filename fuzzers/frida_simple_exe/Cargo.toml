@@ -1,5 +1,5 @@
 [package]
-name = "frida_simple_exe"
+name = "frida_simple_exe_injector"
 edition = "2021"
 version = "0.1.0"
 

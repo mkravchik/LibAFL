@@ -23,7 +23,6 @@ limitations under the License.
 #include <inttypes.h>
 
 // shared memory stuff
-
 #if defined(WIN32) || defined(_WIN32) || defined(__WIN32)
   #include <windows.h>
 #else
@@ -111,7 +110,8 @@ extern "C" void FUZZ_TARGET_MODIFIERS fuzz_internal(
     if (sample_bytes[0] == 't') {
       if (sample_bytes[1] == 'e') {
         // make it a bit harder for the fuzzer
-        if (*(uint32_t *)(sample_bytes) == 0x74736574) {
+        if (*(uint32_t *)(sample_bytes) == 0x74736575) { //This will never happen
+        // if (*(uint32_t *)(sample_bytes) == 0x74736574) {
           printf("Found test. Going to crash.\n");
           // if so, crash
           crash[0] = 1;
@@ -163,20 +163,42 @@ extern "C" void FUZZ_TARGET_MODIFIERS fuzz(char *name) {
   if (sample_bytes) free(sample_bytes);
 }
 
-extern "C" int FUZZ_TARGET_MODIFIERS main(int argc, char **argv) {
-  if (argc != 3) {
-    printf("Usage: %s <-f|-m> <file or shared memory name>\n", argv[0]);
-    return 0;
-  }
 
-  // printf("Sleeping for 30 seconds to allow for debugger to attach\n");
-  // Sleep(30 * 1000);
+// // Testing Ctrl+C handling
+// BOOL WINAPI CtrlHandler(DWORD fdwCtrlType) { 
+//     switch (fdwCtrlType) { 
+//     case CTRL_C_EVENT: 
+//         printf("Ctrl-C event\n\n");
+//         return TRUE; 
+//     default: 
+//         return FALSE; 
+//     } 
+// }
+
+extern "C" int FUZZ_TARGET_MODIFIERS main(int argc, char **argv) {
+
+  // // register Ctrl+C handler
+  // SetConsoleCtrlHandler(CtrlHandler, TRUE);
+
+  printf("Sleeping for 30 seconds to allow for debugger to attach\n");
+  Sleep(30 * 1000);
+
+  // if (argc != 3) {
+  //   printf("Usage: %s <-f|-m> <file or shared memory name>\n", argv[0]);
+  //   return 0;
+  // }
 
   printf("EXE>> main %p argc %d, argv[1] %s, argv[2] %s\n", main, argc, argv[1], argv[2]);
+  char* type = "-f";
+  char* name = "test\\ok_input.txt";
+  // if (argc > 1) 
+  //   type = argv[1];
+  // if (argc > 2)
+  //   name = argv[2];
 
-  if (!strcmp(argv[1], "-m")) {
+  if (!strcmp(type, "-m")) {
     use_shared_memory = true;
-  } else if (!strcmp(argv[1], "-f")) {
+  } else if (!strcmp(type, "-f")) {
     use_shared_memory = false;
   } else {
     printf("Usage: %s <-f|-m> <file or shared memory name>\n", argv[0]);
@@ -186,11 +208,11 @@ extern "C" int FUZZ_TARGET_MODIFIERS main(int argc, char **argv) {
   // map shared memory here as we don't want to do it
   // for every operation
   if (use_shared_memory) {
-    if (!setup_shmem(argv[2])) { printf("Error mapping shared memory\n"); }
+    if (!setup_shmem(name)) { printf("Error mapping shared memory\n"); }
   }
 
   // LoadLibraryA("frida_simple_exe.dll");
-  fuzz(argv[2]);
+  fuzz(name);
 
   printf("Bye\n");
   return 0;

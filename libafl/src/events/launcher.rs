@@ -355,7 +355,7 @@ where
 
         if self.spawn_broker {
             #[cfg(feature = "std")]
-            log::info!("I am broker!!.");
+            log::info!("{:?}: I am broker!!.", std::process::id());
 
             RestartingMgr::<MT, S, SP>::builder()
                 .shmem_provider(self.shmem_provider.clone())
