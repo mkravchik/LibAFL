@@ -60,6 +60,7 @@ Check out the `llmp_test` example in ./examples, or build it with `cargo run --e
 #[cfg(feature = "std")]
 use alloc::string::ToString;
 use alloc::{string::String, vec::Vec};
+use log::info;
 #[cfg(not(target_pointer_width = "64"))]
 use core::sync::atomic::AtomicU32;
 #[cfg(target_pointer_width = "64")]
@@ -2789,6 +2790,33 @@ where
         }
         self.llmp_out.last_msg_sent = out;
         Ok(())
+    }
+    /// Internal function, returns true when shuttdown is requested by a `SIGINT` signal
+    #[inline]
+    #[cfg(any(unix, all(windows, feature = "std")))]
+    #[allow(clippy::unused_self)]
+    fn is_shutting_down(&self) -> bool {
+        unsafe { ptr::read_volatile(ptr::addr_of!(LLMP_SIGHANDLER_STATE.shutting_down)) }
+    }
+
+    #[cfg(any(unix, all(windows, feature = "std")))]
+    fn _setup_signal_handler() -> Result<(), Error> {
+        #[cfg(all(unix, not(miri)))]
+        if let Err(_e) = unsafe { setup_signal_handler(&mut LLMP_SIGHANDLER_STATE) } {
+            // We can live without a proper ctrl+c signal handler. Print and ignore.
+            log::info!("Failed to setup signal handlers: {_e}");
+        }
+        else{
+            log::info!("Successfully setup signal handlers");
+        }
+
+        #[cfg(all(windows, feature = "std"))]
+        if let Err(_e) = unsafe { setup_ctrl_handler(&mut LLMP_SIGHANDLER_STATE) } {
+            // We can live without a proper ctrl+c signal handler. Print and ignore.
+            log::info!("Failed to setup signal handlers: {_e}");
+        }
+        self.clients_to_remove.clear();
+        Ok(new_messages)
     }
 
     /// Internal function, returns true when shuttdown is requested by a `SIGINT` signal

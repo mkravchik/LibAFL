@@ -2,6 +2,7 @@
 
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
+use log::info;
 use core::{
     cell::UnsafeCell,
     fmt::{self, Display, Formatter},
@@ -521,7 +522,7 @@ extern "C" {
 }
 
 unsafe extern "C" fn handle_signal(_signum: i32) {
-    // log::info!("Received signal {}", _signum);
+    log::info!("Received signal {}", _signum);
     internal_handle_exception(ExceptionCode::AssertionFailure, ptr::null_mut());
 }
 
