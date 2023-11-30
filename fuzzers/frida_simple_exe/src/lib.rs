@@ -24,7 +24,7 @@ use log::{
     info, warn
 };
 
-struct StderrLogger;
+pub struct StderrLogger;
 
 impl log::Log for StderrLogger {
     fn enabled(&self, metadata: &Metadata) -> bool {

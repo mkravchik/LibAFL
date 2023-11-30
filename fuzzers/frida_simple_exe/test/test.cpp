@@ -110,8 +110,8 @@ extern "C" void FUZZ_TARGET_MODIFIERS fuzz_internal(
     if (sample_bytes[0] == 't') {
       if (sample_bytes[1] == 'e') {
         // make it a bit harder for the fuzzer
-        if (*(uint32_t *)(sample_bytes) == 0x74736575) { //This will never happen
-        // if (*(uint32_t *)(sample_bytes) == 0x74736574) {
+        // if (*(uint32_t *)(sample_bytes) == 0x74736575) { //This will never happen
+        if (*(uint32_t *)(sample_bytes) == 0x74736574) {
           printf("Found test. Going to crash.\n");
           // if so, crash
           crash[0] = 1;
@@ -180,8 +180,8 @@ extern "C" int FUZZ_TARGET_MODIFIERS main(int argc, char **argv) {
   // // register Ctrl+C handler
   // SetConsoleCtrlHandler(CtrlHandler, TRUE);
 
-  printf("Sleeping for 30 seconds to allow for debugger to attach\n");
-  Sleep(30 * 1000);
+  // printf("Sleeping for 30 seconds to allow for debugger to attach\n");
+  // Sleep(30 * 1000);
 
   // if (argc != 3) {
   //   printf("Usage: %s <-f|-m> <file or shared memory name>\n", argv[0]);
