@@ -2086,6 +2086,7 @@ impl Handler for LlmpShutdownSignalHandler {
     }
 }
 
+/// A control signals (Ctrl+C) handler for the [`LlmpBroker`] on Windows.
 #[cfg(all(windows, feature = "std"))]
 impl CtrlHandler for LlmpShutdownSignalHandler {
     #[allow(clippy::not_unsafe_ptr_arg_deref)]

@@ -11,7 +11,7 @@ use std::{path::PathBuf, fmt};
 
 use frida_gum::Gum;
 use libafl::{
-    corpus::{CachedOnDiskCorpus, Corpus, OnDiskCorpus, Testcase},
+    corpus::{CachedOnDiskCorpus, OnDiskCorpus, Testcase},
     events::{SimpleEventManager, launcher::Launcher, llmp::LlmpRestartingEventManager, EventConfig, EventRestarter, EventFirer},
     executors::{inprocess::InProcessExecutor, ExitKind},
     feedback_or, feedback_or_fast,
@@ -27,7 +27,7 @@ use libafl::{
     observers::{HitcountsMapObserver, StdMapObserver, TimeObserver, BacktraceObserver, ObserverWithHashField, ObserversTuple, HarnessType, Observer},
     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
     stages::{StdMutationalStage},
-    state::{HasCorpus, StdState, HasNamedMetadata, HasClientPerfMonitor, HasMetadata},
+    state::{State, StdState, HasMetadata, HasNamedMetadata },
     Error, feedback_and,    
 };
 #[cfg(unix)]
@@ -96,7 +96,7 @@ impl<'de> Visitor<'de> for BacktraceMetadataVisitor {
         formatter.write_str("a string representing a Backtrace")
     }
 
-    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    fn visit_str<E>(self, _v: &str) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
@@ -216,7 +216,7 @@ pub struct NewHashFeedbackWithStack<O, S> (NewHashFeedback<O, S>);
 impl<O, S> Feedback<S> for NewHashFeedbackWithStack<O, S>
 where
     O: ObserverWithHashField + Named,
-    S: UsesInput + HasNamedMetadata + HasClientPerfMonitor,
+    S:  State + HasNamedMetadata,
 {
     fn init_state(&mut self, state: &mut S) -> Result<(), Error> {
         self.0.init_state(state)
@@ -287,23 +287,9 @@ where
     O: ObserverWithHashField + Named,
 {
     /// Returns a new [`NewHashFeedbackWithStack`].
-    /// Setting an observer name that doesn't exist would eventually trigger a panic.
-    #[must_use]
-    pub fn with_names(name: &str, observer_name: &str) -> Self {
-        Self(NewHashFeedback::with_names(name, observer_name))
-    }
-
-    /// Returns a new [`NewHashFeedbackWithStack`].
     #[must_use]
     pub fn new(observer: &O) -> Self {
         Self(NewHashFeedback::new(observer))
-    }
-
-    /// Returns a new [`NewHashFeedback`] that will create a hash set with the
-    /// given initial capacity.
-    #[must_use]
-    pub fn with_capacity(observer: &O, capacity: usize) -> Self {
-        Self(NewHashFeedback::with_capacity(observer, capacity))
     }
 }
 
@@ -491,6 +477,7 @@ unsafe fn fuzz(
 
 
 // Simplest possible fuzzer based on baby-fuzzer and frida_executable_libpng
+#[allow(dead_code)]
 pub unsafe fn simple_lib(fuzz: extern "C" fn(*const c_char, u32) -> ()) {
     println!("simple_lib !!!");
     
