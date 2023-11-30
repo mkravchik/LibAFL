@@ -2,7 +2,7 @@ use log::{info, warn, LevelFilter};
 use std::ffi::CString;
 use std::ptr::{self, null_mut};
 use winapi::ctypes::c_void;
-use winapi::shared::minwindef::{DWORD, __some_function};
+use winapi::shared::minwindef::{DWORD,};// __some_function};
 use winapi::um::errhandlingapi::GetLastError;
 use winapi::um::handleapi::{CloseHandle};
 use winapi::um::libloaderapi::{GetModuleHandleA, GetProcAddress};
@@ -17,6 +17,7 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
 
 use frida_simple_exe::StderrLogger;
 
+#[allow(dead_code)]
 fn get_kernel32_base_in_target(process_id: u32) -> Option<*mut u8> {
     let snapshot = unsafe {
          CreateToolhelp32Snapshot(TH32CS_SNAPMODULE |  TH32CS_SNAPMODULE32, process_id) 
@@ -137,8 +138,8 @@ pub fn main() {
             let kernel32 = CString::new("kernel32.dll").expect("CString::new failed");
             let kernel32_handle = unsafe { GetModuleHandleA(kernel32.as_ptr()) };
             let load_library_addr = unsafe { GetProcAddress(kernel32_handle, b"LoadLibraryA\0".as_ptr() as *const i8) };
-            let load_library_offset = (load_library_addr as usize) - (kernel32_handle as usize);
-            let mut target_load_library_addr = load_library_addr;
+            // let load_library_offset = (load_library_addr as usize) - (kernel32_handle as usize);
+            let /*mut*/ target_load_library_addr = load_library_addr;
             info!("{}: LoadLibraryA addr: {:p}", std::process::id().to_string(), load_library_addr);
 
             // This code always fails, but I'll keep it as a reference.
@@ -151,7 +152,8 @@ pub fn main() {
             // Two strange things bother me: 1) is that indeed it is always at the same address despite
             // ASLR is enabled; 2) I create a thread giving it an address in kernel32, which is not loaded yet. 
             // But the thread runs, and apparently, the kernel loads kernel32 to perform CreateRemoteThread
-            // I will not spend more time on this now. Letting it run up to the application entry point is a more correct solution. I forgot how we did that. Maybe will look it up later. 
+            // I will not spend more time on this now. Letting it run up to the application entry point is a more correct solution.
+            // I forgot how we did that. Maybe will look it up later. Alternative - call LdrLoadDll directly
             // // Account for ASLR
             // let kernel32_base_in_target = get_kernel32_base_in_target(process_info.dwProcessId);
             // if kernel32_base_in_target.is_none() {

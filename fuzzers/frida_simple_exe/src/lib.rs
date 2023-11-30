@@ -20,7 +20,7 @@ use std::cell::UnsafeCell;
 use std::sync::Mutex;
 use std::env;
 use log::{
-    Record, Level, Metadata, LevelFilter, SetLoggerError,
+    Record, Level, Metadata, LevelFilter, 
     info, warn
 };
 
@@ -302,7 +302,7 @@ fn set_entry_point_hook(exe_base_addr_ptr: NativePointer) -> i32 {
     
     //Print the pointer's value as string
     info!("{}: set_entry_point_hook got the addr: {:p}", std::process::id().to_string(), module_base);
-    let mut entry_point_address : *const u8 = null_mut();
+    let entry_point_address : *const u8;
 
     unsafe{
         // The module base is a pointer to the IMAGE_DOS_HEADER

@@ -1018,6 +1018,7 @@ pub mod windows_asan_handler {
     }
 }
 
+/// The inprocess executor exception handling code for windows
 #[cfg(all(windows, feature = "std"))]
 pub mod windows_exception_handler {
     #[cfg(feature = "std")]

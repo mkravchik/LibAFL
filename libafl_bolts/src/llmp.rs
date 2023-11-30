@@ -1992,6 +1992,7 @@ impl Handler for LlmpShutdownSignalHandler {
     }
 }
 
+/// A control signals (Ctrl+C) handler for the [`LlmpBroker`] on Windows.
 #[cfg(all(windows, feature = "std"))]
 #[derive(Debug, Clone)]
 pub struct LlmpShutdownSignalHandler {
