@@ -13,17 +13,22 @@ The initial injection is done by frida-tools. Install them with
 This will change and the entire thing will be done in Rust.
 
 Build the target with `cl test\test.cpp`
-Build the fuzzer with `cargo build --release`
+Build the fuzzer and the injector with `cargo build --release`
 Copy the fuzzer to the current directory: `copy /Y target\release\frida_simple_exe.dll .`
+Copy the fuzzer to the current directory: `copy /Y target\release\frida_simple_exe_injector.exe .`
 
 ## Run
+
+`frida_simple_exe_injector test.exe frida_simple_exe.dll -H test.exe`
+You can also run it using the Python Frida-based injector, but this will screw the ability
+to stop fuzzing using Ctrl+C
 `python frida_inject.py test.exe -H test.exe`
 
 To run on multiple CPUs use -c option, you can specify the list or cores to use or just `all`:
-`python frida_inject.py test.exe -H test.exe -c 0,1,2,3`
+`frida_simple_exe_injector test.exe frida_simple_exe.dll -H test.exe -c 0,1,2,3`
 
 To restart the fuzzer after the certain number of iterations use -I option:
-`python frida_inject.py test.exe -H test.exe -I 10000`
+`frida_simple_exe_injector test.exe frida_simple_exe.dll -H test.exe -I 10000`
 
 Fuzzing starts when the *trigger function* is called by the application. In future, we may add
 an explicit API call to start fuzzing. The trigger function should be chosen wisely, so that
