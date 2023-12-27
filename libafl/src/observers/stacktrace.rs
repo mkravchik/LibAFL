@@ -54,16 +54,16 @@ pub fn collect_backtrace() -> u64 {
     }
     let mut hash = 0;
     for frame in &b.frames()[1..] {
-        if frame.module_base_address().is_some() && 
-            frame.module_base_address().unwrap() != core::ptr::null_mut() {
+        if frame.module_base_address().is_some()
+            && frame.module_base_address().unwrap() != core::ptr::null_mut()
+        {
             hash ^= frame.ip() as u64;
             log::info!(
                 "module base {:?} ip {:?}",
                 frame.module_base_address(),
                 frame.ip()
             );
-        }
-        else{
+        } else {
             log::info!(
                 "SKipping module base {:?} ip {:?}",
                 frame.module_base_address(),
@@ -142,12 +142,12 @@ impl<'a> BacktraceObserver<'a> {
     #[must_use]
     pub fn new(
         observer_name: &str,
-        backtrace_hash: &'a mut Option<u64>,
+        backtrace_hash: OwnedRefMut<'a, Option<u64>>,
         harness_type: HarnessType,
     ) -> Self {
         Self {
             observer_name: observer_name.to_string(),
-            hash: OwnedRefMut::Ref(backtrace_hash),
+            hash: backtrace_hash,
             harness_type,
         }
     }
@@ -157,15 +157,21 @@ impl<'a> BacktraceObserver<'a> {
     #[must_use]
     pub fn new(
         observer_name: &str,
-        backtrace_hash: &'a mut Option<u64>,
+        backtrace_hash: OwnedRefMut<'a, Option<u64>>,
         harness_type: HarnessType,
     ) -> Self {
         init_ignored_frames!("rust", "cpp", "go");
         Self {
             observer_name: observer_name.to_string(),
-            hash: OwnedRefMut::Ref(backtrace_hash),
+            hash: backtrace_hash,
             harness_type,
         }
+    }
+
+    /// Creates a new [`BacktraceObserver`] with the given name, owning a new `backtrace_hash` variable.
+    #[must_use]
+    pub fn owned(observer_name: &str, harness_type: HarnessType) -> Self {
+        Self::new(observer_name, OwnedRefMut::owned(None), harness_type)
     }
 
     /// Updates the hash value of this observer.

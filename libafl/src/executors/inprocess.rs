@@ -5,7 +5,7 @@
 #![allow(clippy::needless_pass_by_value)]
 
 use alloc::boxed::Box;
-#[cfg(all(unix, feature = "std"))]
+#[cfg(unix)]
 use alloc::vec::Vec;
 #[cfg(all(feature = "std", unix, target_os = "linux"))]
 use core::ptr::addr_of_mut;
@@ -28,8 +28,10 @@ use std::intrinsics::transmute;
 
 #[cfg(all(unix, not(miri)))]
 use libafl_bolts::os::unix_signals::setup_signal_handler;
+#[cfg(unix)]
+use libafl_bolts::os::unix_signals::Signal;
 #[cfg(all(feature = "std", unix))]
-use libafl_bolts::os::unix_signals::{ucontext_t, Handler, Signal};
+use libafl_bolts::os::unix_signals::{ucontext_t, Handler};
 #[cfg(all(windows, feature = "std"))]
 use libafl_bolts::os::windows_exceptions::setup_exception_handler;
 #[cfg(all(feature = "std", unix))]
@@ -274,6 +276,24 @@ pub struct InProcessHandlers {
     /// On timeout C function pointer
     #[cfg(any(unix, feature = "std"))]
     pub timeout_handler: *const c_void,
+}
+
+/// The common signals we want to handle
+#[cfg(unix)]
+#[inline]
+fn common_signals() -> Vec<Signal> {
+    vec![
+        Signal::SigAlarm,
+        Signal::SigUser2,
+        Signal::SigAbort,
+        Signal::SigBus,
+        #[cfg(feature = "handle_sigpipe")]
+        Signal::SigPipe,
+        Signal::SigFloatingPointException,
+        Signal::SigIllegalInstruction,
+        Signal::SigSegmentationFault,
+        Signal::SigTrap,
+    ]
 }
 
 impl InProcessHandlers {
@@ -634,6 +654,42 @@ pub fn run_observers_and_save_state<E, EM, OF, Z>(
     log::info!("Bye!");
 }
 
+// TODO remove this after executor refactor and libafl qemu new executor
+/// Expose a version of the crash handler that can be called from e.g. an emulator
+#[cfg(any(unix, feature = "std"))]
+pub fn generic_inproc_crash_handler<E, EM, OF, Z>()
+where
+    E: Executor<EM, Z> + HasObservers,
+    EM: EventFirer<State = E::State> + EventRestarter<State = E::State>,
+    OF: Feedback<E::State>,
+    E::State: HasExecutions + HasSolutions + HasCorpus,
+    Z: HasObjective<Objective = OF, State = E::State>,
+{
+    let data = unsafe { &mut GLOBAL_STATE };
+    let in_handler = data.set_in_handler(true);
+
+    if data.is_valid() {
+        let executor = data.executor_mut::<E>();
+        // disarms timeout in case of TimeoutExecutor
+        executor.post_run_reset();
+        let state = data.state_mut::<E::State>();
+        let event_mgr = data.event_mgr_mut::<EM>();
+        let fuzzer = data.fuzzer_mut::<Z>();
+        let input = data.take_current_input::<<E::State as UsesInput>::Input>();
+
+        run_observers_and_save_state::<E, EM, OF, Z>(
+            executor,
+            state,
+            input,
+            fuzzer,
+            event_mgr,
+            ExitKind::Crash,
+        );
+    }
+
+    data.set_in_handler(in_handler);
+}
+
 /// The inprocess executor singal handling code for unix
 #[cfg(unix)]
 pub mod unix_signal_handler {
@@ -647,6 +703,7 @@ pub mod unix_signal_handler {
     use libafl_bolts::os::unix_signals::{ucontext_t, Handler, Signal};
     use libc::siginfo_t;
 
+    use super::common_signals;
     #[cfg(feature = "std")]
     use crate::inputs::Input;
     use crate::{
@@ -707,17 +764,7 @@ pub mod unix_signal_handler {
         }
 
         fn signals(&self) -> Vec<Signal> {
-            vec![
-                Signal::SigAlarm,
-                Signal::SigUser2,
-                Signal::SigAbort,
-                Signal::SigBus,
-                Signal::SigPipe,
-                Signal::SigFloatingPointException,
-                Signal::SigIllegalInstruction,
-                Signal::SigSegmentationFault,
-                Signal::SigTrap,
-            ]
+            common_signals()
         }
     }
 
@@ -1506,17 +1553,7 @@ impl Handler for InProcessForkExecutorGlobalData {
     }
 
     fn signals(&self) -> Vec<Signal> {
-        vec![
-            Signal::SigAlarm,
-            Signal::SigUser2,
-            Signal::SigAbort,
-            Signal::SigBus,
-            Signal::SigPipe,
-            Signal::SigFloatingPointException,
-            Signal::SigIllegalInstruction,
-            Signal::SigSegmentationFault,
-            Signal::SigTrap,
-        ]
+        common_signals()
     }
 }
 

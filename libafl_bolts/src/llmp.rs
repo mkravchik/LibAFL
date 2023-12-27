@@ -60,7 +60,6 @@ Check out the `llmp_test` example in ./examples, or build it with `cargo run --e
 #[cfg(feature = "std")]
 use alloc::string::ToString;
 use alloc::{string::String, vec::Vec};
-use log::info;
 #[cfg(not(target_pointer_width = "64"))]
 use core::sync::atomic::AtomicU32;
 #[cfg(target_pointer_width = "64")]
@@ -90,6 +89,7 @@ use std::{
 
 #[cfg(all(debug_assertions, feature = "llmp_debug", feature = "std"))]
 use backtrace::Backtrace;
+use log::info;
 #[cfg(all(unix, feature = "std"))]
 #[cfg(not(any(target_os = "solaris", target_os = "illumos")))]
 use nix::sys::socket::{self, sockopt::ReusePort};
@@ -101,14 +101,13 @@ use crate::current_time;
 use crate::os::unix_signals::setup_signal_handler;
 #[cfg(unix)]
 use crate::os::unix_signals::{siginfo_t, ucontext_t, Handler, Signal};
+#[cfg(all(windows, feature = "std"))]
+use crate::os::windows_exceptions::{setup_ctrl_handler, CtrlHandler};
+#[cfg(all(windows, feature = "std"))]
+use crate::os::windows_exceptions::{setup_ctrl_handler, CtrlHandler};
 use crate::{
     shmem::{ShMem, ShMemDescription, ShMemId, ShMemProvider},
     ClientId, Error,
-};
-
-#[cfg(all(windows, feature = "std"))]
-use crate::os::windows_exceptions::{
-     CtrlHandler, setup_ctrl_handler,
 };
 
 /// The timeout after which a client will be considered stale, and removed.
@@ -206,7 +205,7 @@ pub struct BrokerId(pub u32);
 /// The flags, indicating, for example, enabled compression.
 #[repr(transparent)]
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Flags(u32);
+pub struct Flags(pub u32);
 
 impl Debug for Flags {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -1968,7 +1967,9 @@ where
 }
 
 /// A signal handler for the [`LlmpBroker`].
-#[cfg(unix)]
+/// On unix, it handles signals
+/// On Windows - control signals (e.g., CTRL+C)
+#[cfg(any(unix, all(windows, feature = "std")))]
 #[derive(Debug, Clone)]
 pub struct LlmpShutdownSignalHandler {
     shutting_down: bool,
@@ -1983,7 +1984,7 @@ impl Handler for LlmpShutdownSignalHandler {
         _context: Option<&mut ucontext_t>,
     ) {
         unsafe {
-            ptr::write_volatile(&mut self.shutting_down, true);
+            ptr::write_volatile(ptr::addr_of_mut!(self.shutting_down), true);
         }
     }
 
@@ -1992,25 +1993,17 @@ impl Handler for LlmpShutdownSignalHandler {
     }
 }
 
-/// A control signals (Ctrl+C) handler for the [`LlmpBroker`] on Windows.
-#[cfg(all(windows, feature = "std"))]
-#[derive(Debug, Clone)]
-pub struct LlmpShutdownSignalHandler {
-    shutting_down: bool,
-}
-
 #[cfg(all(windows, feature = "std"))]
 impl CtrlHandler for LlmpShutdownSignalHandler {
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    fn handle( &mut self, ctrl_type: u32 )->bool {
-        info!("LLMP: Received shutdown signal, ctrl_type {:?}", ctrl_type);
+    fn handle(&mut self, ctrl_type: u32) -> bool {
+        log::info!("LLMP: Received shutdown signal, ctrl_type {:?}", ctrl_type);
         unsafe {
             ptr::write_volatile(&mut self.shutting_down, true);
         }
         true
     }
 }
-
 
 /// The broker forwards all messages to its own bus-like broadcast map.
 /// It may intercept messages passing through.
@@ -2271,30 +2264,29 @@ where
     #[cfg(any(unix, all(windows, feature = "std")))]
     #[allow(clippy::unused_self)]
     fn is_shutting_down(&self) -> bool {
-        unsafe { ptr::read_volatile(&LLMP_SIGHANDLER_STATE.shutting_down) }
+        unsafe { ptr::read_volatile(ptr::addr_of!(LLMP_SIGHANDLER_STATE.shutting_down)) }
     }
 
-    #[cfg(any(unix, all(windows, feature = "std")))]
-    fn _setup_signal_handler() -> Result<(), Error> {
+    #[cfg(any(all(unix, not(miri)), all(windows, feature = "std")))]
+    fn setup_handlers() {
         #[cfg(all(unix, not(miri)))]
-        if let Err(_e) = unsafe { setup_signal_handler(&mut LLMP_SIGHANDLER_STATE) } {
-            // We can live without a proper ctrl+c signal handler. Print and ignore.
-            log::info!("Failed to setup signal handlers: {_e}");
-        }
-        else{
+        if let Err(e) = unsafe { setup_signal_handler(&mut LLMP_SIGHANDLER_STATE) } {
+            // We can live without a proper ctrl+c signal handler - Ignore.
+            log::info!("Failed to setup signal handlers: {e}");
+        } else {
             log::info!("Successfully setup signal handlers");
         }
 
         #[cfg(all(windows, feature = "std"))]
-        if let Err(_e) = unsafe { setup_ctrl_handler(&mut LLMP_SIGHANDLER_STATE) } {
-            // We can live without a proper ctrl+c signal handler. Print and ignore.
-            log::info!("Failed to setup signal handlers: {_e}");
+        if let Err(e) = unsafe { setup_ctrl_handler(&mut LLMP_SIGHANDLER_STATE) } {
+            // We can live without a proper ctrl+c signal handler - Ignore.
+            log::info!("Failed to setup control handlers: {e}");
+        } else {
+            log::info!(
+                "{}: Broker successfully setup control handlers",
+                std::process::id().to_string()
+            );
         }
-        else{
-            log::info!("{}: Broker successfully setup signal handlers", std::process::id().to_string());
-        }
-
-        Ok(())
     }
 
     /// Always returns true on platforms, where no shutdown signal handlers are supported
@@ -2329,9 +2321,8 @@ where
     {
         use super::current_milliseconds;
 
-        #[cfg(any(unix, all(windows, feature = "std")))]
-        Self::_setup_signal_handler().unwrap();
-
+        #[cfg(any(all(unix, not(miri)), all(windows, feature = "std")))]
+        Self::setup_handlers();
 
         let timeout = timeout.as_millis() as u64;
         let mut end_time = current_milliseconds() + timeout;
@@ -2391,7 +2382,8 @@ where
     where
         F: FnMut(ClientId, Tag, Flags, &[u8]) -> Result<LlmpMsgHookResult, Error>,
     {
-        Self::_setup_signal_handler().unwrap();
+        #[cfg(any(all(unix, not(miri)), all(windows, feature = "std")))]
+        Self::setup_handlers();
 
         while !self.is_shutting_down() {
             self.once(on_new_msg)
