@@ -89,7 +89,6 @@ use std::{
 
 #[cfg(all(debug_assertions, feature = "llmp_debug", feature = "std"))]
 use backtrace::Backtrace;
-use log::info;
 #[cfg(all(unix, feature = "std"))]
 #[cfg(not(any(target_os = "solaris", target_os = "illumos")))]
 use nix::sys::socket::{self, sockopt::ReusePort};
@@ -101,8 +100,6 @@ use crate::current_time;
 use crate::os::unix_signals::setup_signal_handler;
 #[cfg(unix)]
 use crate::os::unix_signals::{siginfo_t, ucontext_t, Handler, Signal};
-#[cfg(all(windows, feature = "std"))]
-use crate::os::windows_exceptions::{setup_ctrl_handler, CtrlHandler};
 #[cfg(all(windows, feature = "std"))]
 use crate::os::windows_exceptions::{setup_ctrl_handler, CtrlHandler};
 use crate::{

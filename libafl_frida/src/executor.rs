@@ -213,7 +213,7 @@ where
         }
 
         #[cfg(windows)]
-        initialize(&gum);
+        initialize(gum);
 
         Self {
             base,
@@ -239,6 +239,6 @@ where
     /// the timeout handler
     #[inline]
     fn inprocess_handlers(&self) -> &InProcessHandlers {
-        &self.base.handlers()
+        self.base.handlers()
     }
 }

@@ -2,43 +2,55 @@
 //! The example harness is built for libpng.
 use backtrace::Backtrace;
 use mimalloc::MiMalloc;
-use serde::{Deserialize, Serialize, Serializer, de::{self, Visitor}, Deserializer};
+use serde::{
+    de::{self, Visitor},
+    Deserialize, Deserializer, Serialize, Serializer,
+};
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-use std::{path::PathBuf, fmt};
+use std::{ffi::c_char, fmt, path::PathBuf};
 
 use frida_gum::Gum;
 use libafl::{
     corpus::{CachedOnDiskCorpus, OnDiskCorpus, Testcase},
-    events::{SimpleEventManager, launcher::Launcher, llmp::LlmpRestartingEventManager, EventConfig, EventRestarter, EventFirer},
+    events::{
+        launcher::Launcher, llmp::LlmpRestartingEventManager, EventConfig, EventFirer,
+        EventRestarter, SimpleEventManager,
+    },
     executors::{inprocess::InProcessExecutor, ExitKind},
-    feedback_or, feedback_or_fast,
-    feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback, TimeoutFeedback, NewHashFeedback, Feedback, HasObserverName},
+    feedback_and, feedback_or, feedback_or_fast,
+    feedbacks::{
+        CrashFeedback, Feedback, HasObserverName, MaxMapFeedback, NewHashFeedback, TimeFeedback,
+        TimeoutFeedback,
+    },
     fuzzer::{Fuzzer, StdFuzzer},
     generators::RandPrintablesGenerator,
     inputs::{BytesInput, HasTargetBytes, UsesInput},
-    monitors::{SimpleMonitor, MultiMonitor},
+    monitors::{MultiMonitor, SimpleMonitor},
     mutators::{
         scheduled::{havoc_mutations, StdScheduledMutator},
         // token_mutations::{I2SRandReplace, Tokens},
     },
-    observers::{HitcountsMapObserver, StdMapObserver, TimeObserver, BacktraceObserver, ObserverWithHashField, ObserversTuple, HarnessType, Observer},
+    observers::{
+        BacktraceObserver, HarnessType, HitcountsMapObserver, Observer, ObserverWithHashField,
+        ObserversTuple, StdMapObserver, TimeObserver,
+    },
     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
-    stages::{StdMutationalStage},
-    state::{State, StdState, HasMetadata, HasNamedMetadata },
-    Error, feedback_and,    
+    stages::StdMutationalStage,
+    state::{HasMetadata, HasNamedMetadata, State, StdState},
+    Error,
 };
 #[cfg(unix)]
 use libafl::{feedback_and_fast, feedbacks::ConstFeedback};
 use libafl_bolts::{
     cli::{parse_args, FuzzerOptions},
-    current_nanos,
+    current_nanos, impl_serdeany,
     rands::StdRand,
     shmem::{ShMemProvider, StdShMemProvider},
-    tuples::{tuple_list},
-    AsSlice, Named, impl_serdeany,
+    tuples::tuple_list,
+    AsSlice, Named,
 };
 #[cfg(unix)]
 use libafl_frida::asan::{
@@ -51,8 +63,6 @@ use libafl_frida::{
     executor::FridaInProcessExecutor,
     helper::FridaInstrumentationHelper,
 };
-use std::ffi::c_char;
-
 use log::{info, warn};
 
 /// BacktraceMetadata
@@ -70,20 +80,20 @@ impl Serialize for BacktraceMetadata {
         let frames = self.0.frames();
         let hex_frames: Vec<String> = frames
             .iter()
-            .map(|frame| 
-                {
-                    let base_address = frame.module_base_address()
-                        .map(|addr| format!("{:?}", addr))
-                        .unwrap_or_else(|| "unknown".to_string());
-                    format!("base {} ip {:?}", base_address, frame.ip())
-                })
+            .map(|frame| {
+                let base_address = frame
+                    .module_base_address()
+                    .map(|addr| format!("{:?}", addr))
+                    .unwrap_or_else(|| "unknown".to_string());
+                format!("base {} ip {:?}", base_address, frame.ip())
+            })
             .collect();
         let hex_string = hex_frames.join(", ");
         serializer.serialize_str(&hex_string)
     }
 }
 
-// The implementation below is not correct, as it does not actually parses 
+// The implementation below is not correct, as it does not actually parses
 // The string and creates frames out of it.
 // However, I don't think this function is needed.
 // BUT, whithout it, I get weird crashes.
@@ -125,7 +135,7 @@ impl_serdeany!(BacktraceMetadata);
 #[allow(clippy::unsafe_derive_deserialize)]
 #[derive(Serialize, Deserialize, Debug)]
 pub struct BacktraceObserverWithStack<'a> {
-    inner: BacktraceObserver<'a> ,
+    inner: BacktraceObserver<'a>,
     harness_type: HarnessType,
     b: Option<Backtrace>,
 }
@@ -139,9 +149,13 @@ impl<'a> BacktraceObserverWithStack<'a> {
         harness_type: HarnessType,
     ) -> Self {
         Self {
-            inner: BacktraceObserver::new(observer_name, backtrace_hash, harness_type.clone()),
-            harness_type: harness_type,
-            b: None
+            inner: BacktraceObserver::new(
+                observer_name,
+                libafl_bolts::ownedref::OwnedRefMut::Ref(backtrace_hash),
+                harness_type.clone(),
+            ),
+            harness_type,
+            b: None,
         }
     }
 
@@ -207,16 +221,16 @@ impl<'a> Named for BacktraceObserverWithStack<'a> {
     }
 }
 
-/// 
+///
 /// My custom feedback wrapping NewHashFeedback
 /// I did not find any more elegant way of implementing this
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct NewHashFeedbackWithStack<O, S> (NewHashFeedback<O, S>);
+pub struct NewHashFeedbackWithStack<O, S>(NewHashFeedback<O, S>);
 
 impl<O, S> Feedback<S> for NewHashFeedbackWithStack<O, S>
 where
     O: ObserverWithHashField + Named,
-    S:  State + HasNamedMetadata,
+    S: State + HasNamedMetadata,
 {
     fn init_state(&mut self, state: &mut S) -> Result<(), Error> {
         self.0.init_state(state)
@@ -236,7 +250,8 @@ where
         OT: ObserversTuple<S>,
     {
         //Delegate to the self.0
-        self.0.is_interesting(state, _manager, _input, observers, _exit_kind)
+        self.0
+            .is_interesting(state, _manager, _input, observers, _exit_kind)
     }
 
     fn append_metadata<OT>(
@@ -248,24 +263,23 @@ where
     where
         OT: ObserversTuple<S>,
     {
-        info!( "{}: append_metadata called!", 
-            std::process::id().to_string());
+        info!(
+            "{}: append_metadata called!",
+            std::process::id().to_string()
+        );
         let observer = observers
-            .match_name::<BacktraceObserverWithStack>(&self.0.observer_name())
+            .match_name::<BacktraceObserverWithStack>(self.0.observer_name())
             .expect("A NewHashFeedbackWithStack needs a BacktraceObserverWithStack");
 
-        match observer.get_backtrace(){
+        match observer.get_backtrace() {
             // Performance problem here!
-            Some(b)=>testcase.add_metadata(BacktraceMetadata(b.clone())),
-            None=>warn!{"{}: append_metadata did not find backtrace!", 
-                std::process::id().to_string()},
+            Some(b) => testcase.add_metadata(BacktraceMetadata(b.clone())),
+            None => warn! {"{}: append_metadata did not find backtrace!",
+            std::process::id().to_string()},
         }
-        
-
 
         Ok(())
     }
-    
 }
 
 impl<O, S> Named for NewHashFeedbackWithStack<O, S> {
@@ -292,7 +306,6 @@ where
         Self(NewHashFeedback::new(observer))
     }
 }
-
 
 /////////////////////////////////////////////////////////////
 pub unsafe fn lib(target_fuzz: extern "C" fn(*const c_char, u32) -> ()) {
@@ -363,17 +376,20 @@ unsafe fn fuzz(
 
             let mut bt = None;
             let bt_observer = BacktraceObserverWithStack::new(
-                "BacktraceObserver",//TODO - change?
+                "BacktraceObserver", //TODO - change?
                 &mut bt,
                 libafl::observers::HarnessType::InProcess,
             );
-        
+
             // A feedback to choose if an input is a solution or not
             #[cfg(windows)]
             // let mut objective = feedback_or_fast!(CrashFeedback::new(), TimeoutFeedback::new());
-            let mut objective = 
-                feedback_or_fast!(TimeoutFeedback::new(),
-                feedback_and!(CrashFeedback::new(), NewHashFeedbackWithStack::new(&bt_observer))
+            let mut objective = feedback_or_fast!(
+                TimeoutFeedback::new(),
+                feedback_and!(
+                    CrashFeedback::new(),
+                    NewHashFeedbackWithStack::new(&bt_observer)
+                )
             );
 
             // If not restarting, create a State from scratch
@@ -382,8 +398,7 @@ unsafe fn fuzz(
                     // RNG
                     StdRand::with_seed(current_nanos()),
                     // Corpus that will be evolved, we keep it in memory for performance
-                    CachedOnDiskCorpus::new(PathBuf::from("./corpus_discovered"), 64)
-                        .unwrap(),
+                    CachedOnDiskCorpus::new(PathBuf::from("./corpus_discovered"), 64).unwrap(),
                     // Corpus in which we store solutions (crashes in this example),
                     // on disk so the user can get them after stopping the fuzzer
                     OnDiskCorpus::new(options.output.clone()).unwrap(),
@@ -396,7 +411,7 @@ unsafe fn fuzz(
             println!("We're a client, let's fuzz :)");
 
             // Setup a basic mutator with a mutational stage
-            let mutator = StdScheduledMutator::new(havoc_mutations());//.merge(tokens_mutations()));
+            let mutator = StdScheduledMutator::new(havoc_mutations()); //.merge(tokens_mutations()));
 
             // A minimization+queue policy to get testcasess from the corpus
             let scheduler = IndexesLenTimeMinimizerScheduler::new(QueueScheduler::new());
@@ -433,17 +448,26 @@ unsafe fn fuzz(
                 //     });
                 // println!("We imported {} inputs from disk.", state.corpus().count());
                 state
-                .generate_initial_inputs(&mut fuzzer, &mut executor, &mut generator, &mut mgr, 8)
-                .expect("Failed to generate the initial corpus");
+                    .generate_initial_inputs(
+                        &mut fuzzer,
+                        &mut executor,
+                        &mut generator,
+                        &mut mgr,
+                        8,
+                    )
+                    .expect("Failed to generate the initial corpus");
             }
 
             let mut stages = tuple_list!(StdMutationalStage::new(mutator));
 
             // If the number of iterations was provided, call fuzz_loop_iterations
             // otherwise call fuzz_loop indefinitely
-            info!( "{}: Starting the fuzzer on core {:?} for {} iterations\n",
-                std::process::id().to_string(), 
-                core_id, options.iterations);
+            info!(
+                "{}: Starting the fuzzer on core {:?} for {} iterations\n",
+                std::process::id().to_string(),
+                core_id,
+                options.iterations
+            );
             if options.iterations > 0 {
                 fuzzer.fuzz_loop_for(
                     &mut stages,
@@ -453,7 +477,7 @@ unsafe fn fuzz(
                     options.iterations.try_into().unwrap(),
                 )?;
                 mgr.on_restart(&mut state)?;
-                info!( "{}: Restarting the fuzzer", std::process::id().to_string());
+                info!("{}: Restarting the fuzzer", std::process::id().to_string());
             } else {
                 fuzzer.fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)?;
             }
@@ -475,12 +499,11 @@ unsafe fn fuzz(
         .launch()
 }
 
-
 // Simplest possible fuzzer based on baby-fuzzer and frida_executable_libpng
 #[allow(dead_code)]
 pub unsafe fn simple_lib(fuzz: extern "C" fn(*const c_char, u32) -> ()) {
     println!("simple_lib !!!");
-    
+
     let options = parse_args();
 
     // Define the harness function
@@ -498,8 +521,7 @@ pub unsafe fn simple_lib(fuzz: extern "C" fn(*const c_char, u32) -> ()) {
 
     let coverage = CoverageRuntime::new();
 
-    let mut frida_helper =
-        FridaInstrumentationHelper::new(&gum, &options, tuple_list!(coverage));
+    let mut frida_helper = FridaInstrumentationHelper::new(&gum, &options, tuple_list!(coverage));
 
     // Create an observation channel using the coverage map
     let edges_observer = HitcountsMapObserver::new(StdMapObserver::from_mut_ptr(
@@ -525,19 +547,17 @@ pub unsafe fn simple_lib(fuzz: extern "C" fn(*const c_char, u32) -> ()) {
 
     // If not restarting, create a State from scratch
     let mut state = StdState::new(
-            // RNG
-            StdRand::with_seed(current_nanos()),
-            // Corpus that will be evolved, we keep it in memory for performance
-            CachedOnDiskCorpus::no_meta(PathBuf::from("./corpus_discovered"), 64)
-                .unwrap(),
-            // Corpus in which we store solutions (crashes in this example),
-            // on disk so the user can get them after stopping the fuzzer
-            OnDiskCorpus::new(options.output.clone()).unwrap(),
-            &mut feedback,
-            &mut objective,
-        )
-        .unwrap();
-
+        // RNG
+        StdRand::with_seed(current_nanos()),
+        // Corpus that will be evolved, we keep it in memory for performance
+        CachedOnDiskCorpus::no_meta(PathBuf::from("./corpus_discovered"), 64).unwrap(),
+        // Corpus in which we store solutions (crashes in this example),
+        // on disk so the user can get them after stopping the fuzzer
+        OnDiskCorpus::new(options.output.clone()).unwrap(),
+        &mut feedback,
+        &mut objective,
+    )
+    .unwrap();
 
     // // A queue policy to get testcasess from the corpus
     // let scheduler = QueueScheduler::new();
@@ -566,7 +586,8 @@ pub unsafe fn simple_lib(fuzz: extern "C" fn(*const c_char, u32) -> ()) {
             &mut fuzzer,
             &mut state,
             &mut mgr,
-        ).expect("Failed to create the InProcessExecutor"),
+        )
+        .expect("Failed to create the InProcessExecutor"),
         &mut frida_helper,
     );
 
