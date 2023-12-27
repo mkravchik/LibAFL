@@ -10,11 +10,17 @@ pub fn initialize(gum: &Gum) {
     let is_processor_feature_present =
         Module::find_export_by_name(Some("kernel32.dll"), "IsProcessorFeaturePresent");
     let is_processor_feature_present = is_processor_feature_present.unwrap();
-    assert!(!is_processor_feature_present.is_null(), "IsProcessorFeaturePresent not found");
+    assert!(
+        !is_processor_feature_present.is_null(),
+        "IsProcessorFeaturePresent not found"
+    );
     let unhandled_exception_filter =
         Module::find_export_by_name(Some("kernel32.dll"), "UnhandledExceptionFilter");
     let unhandled_exception_filter = unhandled_exception_filter.unwrap();
-    assert!(!unhandled_exception_filter.is_null(), "UnhandledExceptionFilter not found");
+    assert!(
+        !unhandled_exception_filter.is_null(),
+        "UnhandledExceptionFilter not found"
+    );
 
     let mut interceptor = Interceptor::obtain(gum);
     use std::ffi::c_void;
@@ -36,7 +42,6 @@ pub fn initialize(gum: &Gum) {
         .unwrap();
 
     unsafe extern "C" fn is_processor_feature_present_detour(feature: u32) -> bool {
-        
         match feature {
             0x17 => false,
             _ => IsProcessorFeaturePresent(PROCESSOR_FEATURE_ID(feature)).as_bool(),
