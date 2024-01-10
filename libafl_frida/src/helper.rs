@@ -17,7 +17,6 @@ use libafl::{
     Error,
 };
 use libafl_bolts::{cli::FuzzerOptions, tuples::MatchFirstType};
-// #[cfg(unix)]
 use libafl_targets::drcov::DrCovBasicBlock;
 #[cfg(unix)]
 use nix::sys::mman::{mmap, MapFlags, ProtFlags};
@@ -391,7 +390,8 @@ where
 
         path == Path::new(&module_name)
             || path == module_path
-            || fs::canonicalize(path).ok() == canonicalized_module_path
+            || (canonicalized_module_path.is_some()
+                && fs::canonicalize(path).ok() == canonicalized_module_path)
     })
 }
 
@@ -467,7 +467,6 @@ where
         let mut basic_block_size = 0;
         for instruction in basic_block {
             let instr = instruction.instr();
-            // #[cfg(unix)]
             let instr_size = instr.bytes().len();
             let address = instr.address();
             // log::trace!("block @ {:x} transformed to {:x}", address, output.writer().pc());
@@ -485,7 +484,6 @@ where
                         rt.emit_coverage_mapping(address, output);
                     }
 
-                    // #[cfg(unix)]
                     if let Some(_rt) = runtimes.match_first_type_mut::<DrCovRuntime>() {
                         basic_block_start = address;
                     }
@@ -548,14 +546,12 @@ where
                     );
                 }
 
-                // #[cfg(unix)]
                 if let Some(_rt) = runtimes.match_first_type_mut::<DrCovRuntime>() {
                     basic_block_size += instr_size;
                 }
             }
             instruction.keep();
         }
-        // #[cfg(unix)]
         if basic_block_size != 0 {
             if let Some(rt) = runtimes.borrow_mut().match_first_type_mut::<DrCovRuntime>() {
                 log::trace!("{basic_block_start:#016X}:{basic_block_size:X}");
