@@ -7,13 +7,14 @@ fn main() {
     let out_dir = env::var_os("OUT_DIR").unwrap();
     let out_dir = out_dir.to_string_lossy().to_string();
     //let out_dir_path = Path::new(&out_dir);
+    #[allow(unused_variables)]
     let src_dir = Path::new("src");
 
     let dest_path = Path::new(&out_dir).join("constants.rs");
     let mut constants_file = File::create(dest_path).expect("Could not create file");
 
     let edges_map_size: usize = option_env!("LIBAFL_EDGES_MAP_SIZE")
-        .map_or(Ok(65536), str::parse)
+        .map_or(Ok(2621440), str::parse)
         .expect("Could not parse LIBAFL_EDGES_MAP_SIZE");
     let cmp_map_size: usize = option_env!("LIBAFL_CMP_MAP_SIZE")
         .map_or(Ok(65536), str::parse)
