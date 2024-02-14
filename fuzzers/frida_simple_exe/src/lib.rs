@@ -499,12 +499,12 @@ unsafe extern "C" fn create_process_detour(
             winapi::um::errhandlingapi::GetLastError()
         );
     } else if WriteProcessMemory(
-            process_handle,
-            p_memory,
-            module_name.as_ptr() as *const _,
-            process_name_len,
-            null_mut(),
-        ) == 0
+        process_handle,
+        p_memory,
+        module_name.as_ptr() as *const _,
+        process_name_len,
+        null_mut(),
+    ) == 0
     {
         VirtualFreeEx(process_handle, p_memory, 0, MEM_RELEASE);
     } else {
@@ -568,17 +568,13 @@ unsafe extern "C" fn create_process_detour(
 }
 
 #[no_mangle]
-pub extern "C" fn rust_main_hook(
-    argc: i32,
-    argv: *const *const u8,
-    _env: *const *const u8,
-) -> i32 {
+pub extern "C" fn rust_main_hook(argc: i32, argv: *const *const u8, _env: *const *const u8) -> i32 {
     info!(
         "{}: rust_main_hook called! argc {:?}",
         std::process::id().to_string(),
         argc
     );
-    
+
     // Safety - ffi is unsafe and start_fuzzing too
     unsafe {
         //Log all the arguments
@@ -613,7 +609,7 @@ pub extern "C" fn rust_fuzz_hook(sample_bytes: *const c_char, sample_size: u32) 
         sample_size
     );
 
-    unsafe{ start_fuzzing() }
+    unsafe { start_fuzzing() }
     // We don't call the original fuzz function. We start fuzzing instead
     // ORIGINAL_FUZZ
     //     .lock()
