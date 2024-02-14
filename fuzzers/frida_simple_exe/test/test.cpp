@@ -100,17 +100,18 @@ char *crash = NULL;
 
 // actual target function
 // I'm cheating all the way :-
-extern "C" void FUZZ_TARGET_MODIFIERS fuzz_internal(
-  char    *sample_bytes, uint32_t sample_size)
-{
-  // printf("EXE>> fuzz_internal %p sample_bytes %p (%s), sample_size %d\n", 
-    // fuzz_internal, sample_bytes, sample_bytes, sample_size);
+extern "C" void FUZZ_TARGET_MODIFIERS fuzz_internal(char    *sample_bytes,
+                                                    uint32_t sample_size) {
+  // printf("EXE>> fuzz_internal %p sample_bytes %p (%s), sample_size %d\n",
+  // fuzz_internal, sample_bytes, sample_bytes, sample_size);
   if (sample_size >= 4) {
-    // check if the sample spells "test", but do it char-by-char to guide the fuzzer
+    // check if the sample spells "test", but do it char-by-char to guide the
+    // fuzzer
     if (sample_bytes[0] == 't') {
       if (sample_bytes[1] == 'e') {
         // make it a bit harder for the fuzzer
-        // if (*(uint32_t *)(sample_bytes) == 0x74736575) { //This will never happen
+        // if (*(uint32_t *)(sample_bytes) == 0x74736575) { //This will never
+        // happen
         if (*(uint32_t *)(sample_bytes) == 0x74736574) {
           printf("Found test. Going to crash.\n");
           // if so, crash
@@ -129,7 +130,6 @@ extern "C" void FUZZ_TARGET_MODIFIERS fuzz_internal(
     }
   }
 }
-
 
 extern "C" void FUZZ_TARGET_MODIFIERS fuzz(char *name) {
   char    *sample_bytes = NULL;
@@ -156,27 +156,26 @@ extern "C" void FUZZ_TARGET_MODIFIERS fuzz(char *name) {
     fread(sample_bytes, 1, sample_size, fp);
     fclose(fp);
   }
-  
-  printf("EXE>> calling fuzz_internal sample_bytes %p sample_size %d\n", sample_bytes, sample_size);
+
+  printf("EXE>> calling fuzz_internal sample_bytes %p sample_size %d\n",
+         sample_bytes, sample_size);
   fuzz_internal(sample_bytes, sample_size);
 
   if (sample_bytes) free(sample_bytes);
 }
 
-
 // // Testing Ctrl+C handling
-// BOOL WINAPI CtrlHandler(DWORD fdwCtrlType) { 
-//     switch (fdwCtrlType) { 
-//     case CTRL_C_EVENT: 
+// BOOL WINAPI CtrlHandler(DWORD fdwCtrlType) {
+//     switch (fdwCtrlType) {
+//     case CTRL_C_EVENT:
 //         printf("Ctrl-C event\n\n");
-//         return TRUE; 
-//     default: 
-//         return FALSE; 
-//     } 
+//         return TRUE;
+//     default:
+//         return FALSE;
+//     }
 // }
 
 extern "C" int FUZZ_TARGET_MODIFIERS main(int argc, char **argv) {
-
   // // register Ctrl+C handler
   // SetConsoleCtrlHandler(CtrlHandler, TRUE);
 
@@ -188,10 +187,11 @@ extern "C" int FUZZ_TARGET_MODIFIERS main(int argc, char **argv) {
   //   return 0;
   // }
 
-  printf("EXE>> main %p argc %d, argv[1] %s, argv[2] %s\n", main, argc, argv[1], argv[2]);
-  char* type = "-f";
-  char* name = "test\\ok_input.txt";
-  // if (argc > 1) 
+  printf("EXE>> main %p argc %d, argv[1] %s, argv[2] %s\n", main, argc, argv[1],
+         argv[2]);
+  char *type = "-f";
+  char *name = "test\\ok_input.txt";
+  // if (argc > 1)
   //   type = argv[1];
   // if (argc > 2)
   //   name = argv[2];

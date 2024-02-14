@@ -460,7 +460,7 @@ where
         output: &StalkerOutput,
         ranges: &Rc<RefCell<RangeMap<usize, (u16, String)>>>,
         runtimes: &Rc<RefCell<RT>>,
-        _decoder: InstDecoder,
+        decoder: InstDecoder,
     ) {
         let mut first = true;
         let mut basic_block_start = 0;
