@@ -500,9 +500,8 @@ where
                             output.writer().pc()
                         );
                     }
-                    if let Some(_rt) = runtimes.match_first_type_mut::<DrCovRuntime>() {
-                        basic_block_start = address;
-                    }
+
+                    basic_block_start = address;
                 }
 
                 let res = if let Some(_rt) = runtimes.match_first_type_mut::<AsanRuntime>() {
@@ -577,24 +576,30 @@ where
                     );
                 }
 
-                if let Some(_rt) = runtimes.match_first_type_mut::<DrCovRuntime>() {
-                    basic_block_size += instr_size;
-                }
+                basic_block_size += instr_size;
             }
             instruction.keep();
         }
         if basic_block_size != 0 {
-            if let Some(rt) = runtimes_unborrowed
-                .borrow_mut()
-                .match_first_type_mut::<DrCovRuntime>()
-            {
-                log::trace!("{basic_block_start:#016X}:{basic_block_size:X}");
+            log::trace!("{basic_block_start:#016X}:{basic_block_size:X}");
+            if let Some(rt) = runtimes.borrow_mut().match_first_type_mut::<DrCovRuntime>() {
                 rt.drcov_basic_blocks.push(DrCovBasicBlock::new(
                     basic_block_start as usize,
                     basic_block_start as usize + basic_block_size,
                 ));
             }
+            if let Some(rt) = runtimes
+                .borrow_mut()
+                .match_first_type_mut::<CoverageRuntime>()
+            {
+                rt.set_bb_size(basic_block_start, basic_block_size);
+            }
         }
+    }
+
+    /// Clean up all runtimes
+    pub fn deinit(&mut self, gum: &Gum) {
+        (*self.runtimes).borrow_mut().deinit_all(gum);
     }
 
     /// Clean up all runtimes
