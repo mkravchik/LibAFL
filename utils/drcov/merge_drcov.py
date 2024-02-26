@@ -6,6 +6,8 @@ import drcov
 import platform
 import json
 import tqdm
+from ctypes import *
+from collections import defaultdict
 
 verbose = False
 # DrCov file writer based on 
@@ -24,7 +26,60 @@ class HashableDrcovBasicBlock(drcov.DrcovBasicBlock):
         if isinstance(other, HashableDrcovBasicBlock):
             return self.start == other.start and self.size == other.size and self.mod_id == other.mod_id
         return False
-    
+
+class DrcovBasicBlockWithCounter(Structure):
+    """
+    Parser & wrapper for basic block with counter details as found in the drcov.cnt files.
+
+    NOTE:
+
+      Based off the following Rust structure
+
+    #[repr(C)]
+    struct DrCovBasicBlockEntryWithCounter {
+        start: u32,
+        size: u16,
+        mod_id: u16,
+        count: u32,
+    }
+
+    """
+    _pack_   = 1
+    _fields_ = [
+        ('start',  c_uint32),
+        ('size',   c_uint16),
+        ('mod_id', c_uint16),
+        ('count', c_uint32)
+    ]
+
+# A class that reads serialized DrcovBasicBlockWithCounter
+class DrcovBasicBlockWithCounterReader:
+    def __init__(self, file_name):
+        self.file = open(file_name, "rb")
+        self.bbs = {}
+        self._read_bbs()
+
+    def _read_bbs(self):
+        while True:
+            bb = DrcovBasicBlockWithCounter()
+            read = self.file.readinto(bb)
+            if read == 0:
+                break
+            self.bbs[HashableDrcovBasicBlock(drcov.DrcovBasicBlock(bb.start, bb.size, bb.mod_id))] = bb.count
+
+    def close(self):
+        self.file.close()
+
+    def __len__(self):
+        return len(self.bbs)
+
+    def __getitem__(self, key):
+        return self.bbs[HashableDrcovBasicBlock(key)]
+
+    def __contains__(self, item):
+        return HashableDrcovBasicBlock(item) in self.bbs
+
+
 # A class that creates a DrCov file
 class DrcovFile:
     def __init__(self, file_name, allow_duplicates=False):
@@ -187,7 +242,7 @@ def merge_drcov(directory, aggregate, keep=False, output_directory=None, counter
         return
     
     writer = create_merged_drcov_writer(files[0], aggregate, output_directory)
-    bb_counters = {}
+    bb_counters = defaultdict(dict)
     modules = {}
 
     def write_results():
@@ -202,8 +257,8 @@ def merge_drcov(directory, aggregate, keep=False, output_directory=None, counter
                 md = {"modules": modules, "bb_counters": bb_counters}
                 json.dump(md, f)
         writer = create_merged_drcov_writer(file, aggregate, output_directory)
-        bb_counters = {}
-        modules = {}
+        bb_counters.clear()
+        modules.clear()
 
     print(f"Found {len(files)} files")
     for file in tqdm.tqdm(files):
@@ -226,6 +281,21 @@ def merge_drcov(directory, aggregate, keep=False, output_directory=None, counter
             print("Error processing file:", file)
             print(e)
             continue
+        
+        cnt_reader = None
+        cnt_file = None
+        if os.path.exists(file + ".cnt"):
+            cnt_file = file + ".cnt"
+            if verbose:
+                print("Processing counter file:", cnt_file)
+            try:                
+                cnt_reader = DrcovBasicBlockWithCounterReader(cnt_file)
+                cnt_reader.close()
+            except Exception as e:
+                print("Error processing file:", file)
+                print(e)
+                continue
+
         if verbose:
             print("# of modules:", len(DrcovData.modules))
         if verbose:
@@ -252,16 +322,22 @@ def merge_drcov(directory, aggregate, keep=False, output_directory=None, counter
                 print(f"{hex(bb.start), hex(bb.size)}")
             bb_exists = writer.add_bb(bb)  
             if counters:
+                def get_bb_counter(bb):
+                    if cnt_reader is not None and bb in cnt_reader:
+                        if verbose:
+                            print(f"Counter for {hex(bb.start)}: {cnt_reader[bb]}")
+                        return cnt_reader[bb]
+                    return 1
+                
                 if not bb_exists:
                     if bb.mod_id not in bb_counters:
-                        bb_counters[bb.mod_id] = {}
-                    if bb.start not in bb_counters[bb.mod_id]:
-                        bb_counters[bb.mod_id][hex(bb.start)] = 1
-                else:
-                    bb_counters[bb.mod_id][hex(bb.start)] += 1                 
+                        bb_counters[bb.mod_id] = defaultdict(int)
+                bb_counters[bb.mod_id][hex(bb.start)] += get_bb_counter(bb)
 
         if not keep:
             os.remove(file)
+            if cnt_file is not None:
+                os.remove(cnt_file)
 
     write_results()
     end_time = time.time()

@@ -16,7 +16,7 @@ use dynasmrt::DynasmLabelApi;
 use dynasmrt::{dynasm, DynasmApi};
 use frida_gum::{instruction_writer::InstructionWriter, stalker::StalkerOutput, ModuleMap};
 use libafl_bolts::hash_std;
-use libafl_targets::drcov::{DrCovBasicBlock, DrCovWriter};
+use libafl_targets::drcov::{DrCovBasicBlock, DrCovWriterWithCounter};
 use rangemap::RangeMap;
 
 use crate::helper::FridaRuntime;
@@ -33,6 +33,7 @@ struct CoverageRuntimeInner {
 
 #[derive(Debug)]
 struct DrCov {
+    inner_bbs: Pin<Rc<RefCell<CoverageRuntimeInner>>>,
     ranges: RangeMap<usize, (u16, String)>,
     coverage_directory: PathBuf,
     basic_blocks: HashMap<u64, DrCovBasicBlock>,
@@ -45,7 +46,6 @@ struct DrCov {
 #[derive(Debug)]
 pub struct CoverageRuntime {
     inner: Pin<Rc<RefCell<CoverageRuntimeInner>>>,
-    inner_bbs: Pin<Rc<RefCell<CoverageRuntimeInner>>>,
     save_dr_cov: bool,
     drcov: DrCov,
 }
@@ -93,16 +93,17 @@ impl FridaRuntime for CoverageRuntime {
 
             // Create basic blocks
             let mut drcov_basic_blocks: Vec<DrCovBasicBlock> = vec![];
+            let mut bb_counters: Vec<u32> = vec![];
 
             for (key, value) in &self.drcov.basic_blocks {
                 // Is map[key] greater than 0?
-                if self.inner_bbs.borrow().map[*key as usize] == 0 {
+                if self.drcov.inner_bbs.borrow().map[*key as usize] == 0 {
                     continue;
                 }
 
                 drcov_basic_blocks.push(*value);
+                bb_counters.push(u32::from(self.drcov.inner_bbs.borrow().map[*key as usize]));
             }
-
             let mut coverage_hasher = RandomState::with_seeds(0, 0, 0, 0).build_hasher();
             for bb in &drcov_basic_blocks {
                 coverage_hasher.write_usize(bb.start);
@@ -123,14 +124,19 @@ impl FridaRuntime for CoverageRuntime {
                     .join(format!("{}_{coverage_hash:016x}.drcov", &input_name))
             };
 
-            DrCovWriter::new(&self.drcov.ranges).write(filename, &drcov_basic_blocks)?;
+            DrCovWriterWithCounter::new(&self.drcov.ranges).write(
+                filename,
+                &drcov_basic_blocks,
+                &bb_counters,
+            )?;
+
             if self.drcov.max_cnt > 0 {
                 self.drcov.stored_cnt += self.drcov.cnt;
                 self.drcov.cnt = 0;
             }
 
             //reset the inner_bbs map
-            self.inner_bbs.borrow_mut().map = [0_u8; MAP_SIZE];
+            self.drcov.inner_bbs.borrow_mut().map = [0_u8; MAP_SIZE];
 
             return Ok(());
         }
@@ -148,13 +154,13 @@ impl CoverageRuntime {
                 previous_pc: 0,
                 _pinned: PhantomPinned,
             })),
-            inner_bbs: Rc::pin(RefCell::new(CoverageRuntimeInner {
-                map: [0_u8; MAP_SIZE],
-                previous_pc: 0,
-                _pinned: PhantomPinned,
-            })),
             save_dr_cov: false,
             drcov: DrCov {
+                inner_bbs: Rc::pin(RefCell::new(CoverageRuntimeInner {
+                    map: [0_u8; MAP_SIZE],
+                    previous_pc: 0,
+                    _pinned: PhantomPinned,
+                })),
                 ranges: RangeMap::new(),
                 coverage_directory: PathBuf::from("./coverage"),
                 basic_blocks: HashMap::new(),
@@ -200,7 +206,7 @@ impl CoverageRuntime {
         let mut borrow = self.inner.borrow_mut();
         let prev_loc_ptr = addr_of_mut!(borrow.previous_pc);
         let map_addr_ptr = addr_of_mut!(borrow.map);
-        let bbs_map_addr_ptr = addr_of_mut!(self.inner_bbs.borrow_mut().map);
+        let bbs_map_addr_ptr = addr_of_mut!(self.drcov.inner_bbs.borrow_mut().map);
         let mut ops = dynasmrt::VecAssembler::<dynasmrt::aarch64::Aarch64Relocation>::new(0);
         if save_block_cov {
             dynasm!(ops
@@ -324,7 +330,7 @@ impl CoverageRuntime {
         let mut borrow = self.inner.borrow_mut();
         let prev_loc_ptr = addr_of_mut!(borrow.previous_pc);
         let map_addr_ptr = addr_of_mut!(borrow.map);
-        let bbs_map_addr_ptr = addr_of_mut!(self.inner_bbs.borrow_mut().map);
+        let bbs_map_addr_ptr = addr_of_mut!(self.drcov.inner_bbs.borrow_mut().map);
         let mut ops = dynasmrt::VecAssembler::<dynasmrt::x64::X64Relocation>::new(0);
         if save_block_cov {
             dynasm!(ops
