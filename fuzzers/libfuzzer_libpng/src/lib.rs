@@ -1,5 +1,7 @@
 //! A libfuzzer-like fuzzer with llmp-multithreading support and restarts
 //! The example harness is built for libpng.
+mod accum_observer;
+
 use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -9,6 +11,7 @@ use core::time::Duration;
 use std::ptr;
 use std::{env, path::PathBuf};
 
+use clap_builder::Parser; // I tried my best to use Parser from clap directly, but to no avail
 use libafl::{
     corpus::{Corpus, InMemoryCorpus, OnDiskCorpus},
     events::{setup_restarting_mgr_std, EventConfig, EventRestarter},
@@ -31,12 +34,15 @@ use libafl::{
     Error,
 };
 use libafl_bolts::{
+    cli::FuzzerOptions,
     current_nanos,
     rands::StdRand,
     tuples::{tuple_list, Merge},
     AsSlice,
 };
 use libafl_targets::{libfuzzer_initialize, libfuzzer_test_one_input, EDGES_MAP, MAX_EDGES_NUM};
+
+use crate::accum_observer::AccMapObserver;
 
 /// The main fn, `no_mangle` as it is a C main
 #[cfg(not(test))]
@@ -85,6 +91,25 @@ fn fuzz(corpus_dirs: &[PathBuf], objective_dir: PathBuf, broker_port: u16) -> Re
             EDGES_MAP.as_mut_ptr(),
             MAX_EDGES_NUM,
         ))
+    };
+
+    let options = FuzzerOptions::try_parse();
+    let save_bb_coverage = options
+        .as_ref()
+        .map(|opts| opts.save_bb_coverage)
+        .unwrap_or(false);
+    let drcov_max_execution_cnt = options
+        .as_ref()
+        .map(|opts| opts.drcov_max_execution_cnt)
+        .unwrap_or(0);
+    let acc_observer = unsafe {
+        AccMapObserver::new(StdMapObserver::from_mut_ptr(
+            "edges",
+            EDGES_MAP.as_mut_ptr(),
+            MAX_EDGES_NUM,
+        ))
+        .save_dr_cov(save_bb_coverage)
+        .max_cnt(drcov_max_execution_cnt)
     };
 
     // Create an observation channel to keep track of the execution time
@@ -175,7 +200,7 @@ fn fuzz(corpus_dirs: &[PathBuf], objective_dir: PathBuf, broker_port: u16) -> Re
     // Create the executor for an in-process function with one observer for edge coverage and one for the execution time
     let mut executor = InProcessExecutor::with_timeout(
         &mut harness,
-        tuple_list!(edges_observer, time_observer),
+        tuple_list!(acc_observer, edges_observer, time_observer),
         &mut fuzzer,
         &mut state,
         &mut restarting_mgr,
