@@ -92,17 +92,26 @@ impl<'a> DrCovWriter<'a> {
             .write_all(format!("BB Table: {} bbs\n", basic_blocks.len()).as_bytes())
             .unwrap();
         for block in basic_blocks {
-            let (range, (id, _)) = self.module_mapping.get_key_value(&block.start).unwrap();
-            let basic_block = DrCovBasicBlockEntry {
-                start: (block.start - range.start) as u32,
-                size: (block.end - block.start) as u16,
-                mod_id: *id,
-            };
-            writer
-                .write_all(unsafe {
-                    std::slice::from_raw_parts(addr_of!(basic_block) as *const u8, 8)
-                })
-                .unwrap();
+            // Try finding the module for this basic block
+            // If we can't find it, at least log a warning
+            if self.module_mapping.get_key_value(&block.start).is_none() {
+                log::warn!(
+                    "Basic block at 0x{:x} not found in module mapping",
+                    block.start
+                );
+            } else {
+                let (range, (id, _)) = self.module_mapping.get_key_value(&block.start).unwrap();
+                let basic_block = DrCovBasicBlockEntry {
+                    start: (block.start - range.start) as u32,
+                    size: (block.end - block.start) as u16,
+                    mod_id: *id,
+                };
+                writer
+                    .write_all(unsafe {
+                        std::slice::from_raw_parts(addr_of!(basic_block) as *const u8, 8)
+                    })
+                    .unwrap();
+            }
         }
 
         writer.flush()?;
@@ -165,21 +174,30 @@ impl<'a> DrCovWriterWithCounter<'a> {
         // Write the counters, all modules info is contained in the original file
         // I don't like it, but I don't like unnecessary parsing either
         for (index, block) in basic_blocks.iter().enumerate() {
-            let (range, (id, _)) = self.module_mapping.get_key_value(&block.start).unwrap();
-            let basic_block = DrCovBasicBlockEntryWithCounter {
-                start: (block.start - range.start) as u32,
-                size: (block.end - block.start) as u16,
-                mod_id: *id,
-                count: counters[index],
-            };
-            writer
-                .write_all(unsafe {
-                    std::slice::from_raw_parts(
-                        addr_of!(basic_block) as *const u8,
-                        std::mem::size_of::<DrCovBasicBlockEntryWithCounter>(),
-                    )
-                })
-                .unwrap();
+            // Try finding the module for this basic block
+            // If we can't find it, at least log a warning
+            if self.module_mapping.get_key_value(&block.start).is_none() {
+                log::warn!(
+                    "Basic block at 0x{:x} not found in module mapping",
+                    block.start
+                );
+            } else {
+                let (range, (id, _)) = self.module_mapping.get_key_value(&block.start).unwrap();
+                let basic_block = DrCovBasicBlockEntryWithCounter {
+                    start: (block.start - range.start) as u32,
+                    size: (block.end - block.start) as u16,
+                    mod_id: *id,
+                    count: counters[index],
+                };
+                writer
+                    .write_all(unsafe {
+                        std::slice::from_raw_parts(
+                            addr_of!(basic_block) as *const u8,
+                            std::mem::size_of::<DrCovBasicBlockEntryWithCounter>(),
+                        )
+                    })
+                    .unwrap();
+            }
         }
 
         writer.flush()?;
