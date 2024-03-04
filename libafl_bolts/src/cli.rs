@@ -231,7 +231,7 @@ pub struct FuzzerOptions {
     #[arg(long, help_heading = "Frida Options")]
     pub disable_coverage: bool,
 
-    /// Write basic block coverage to disk in DrCov format
+    /// Write basic block coverage to disk in `DrCov` format
     #[cfg(feature = "frida_cli")]
     #[arg(long, help_heading = "Frida Options")]
     pub save_bb_coverage: bool,
