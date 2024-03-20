@@ -97,4 +97,6 @@ In order to get the counters per BB, use the merge_drcov tool:
 ### Notes:
 1. As of now, the coverage map keeps 1 byte per BB. So if a BB was hit more than 256 times per input, this will not be reflected correctly.
 2. The code was tested on Linux only
-3. The `DrCov` files produced by the `merge_drcov` are valid and can be processed by tools such as `drcov2lcov`
+3. The `DrCov` files produced by the `merge_drcov` are valid and can be processed by tools such as `drcov2lcov`. Please use the latest
+version of drcov2lcov, release `10.0.0` has bugs. Specifically, the release `10.0.19798` was tested and works. It is recommended to run it as below in order to focus only on the libpng sources:
+`~/Downloads/DynamoRIO-Linux-10.0.19798/tools/bin64/drcov2lcov -input ./coverage/merged.drcov -output ./coverage.old.info -src_filter libpng-1.6.37`
