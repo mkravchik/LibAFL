@@ -100,3 +100,4 @@ In order to get the counters per BB, use the merge_drcov tool:
 3. The `DrCov` files produced by the `merge_drcov` are valid and can be processed by tools such as `drcov2lcov`. Please use the latest
 version of drcov2lcov, release `10.0.0` has bugs. Specifically, the release `10.0.19798` was tested and works. It is recommended to run it as below in order to focus only on the libpng sources:
 `~/Downloads/DynamoRIO-Linux-10.0.19798/tools/bin64/drcov2lcov -input ./coverage/merged.drcov -output ./coverage.old.info -src_filter libpng-1.6.37`
+4. You can convert the generated coverage.info into html using genhtml tool like this: `perl ~/dynamorio/third_party/lcov/genhtml --ignore-errors=source ./coverage.info -o /tmp/cov`
