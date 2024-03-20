@@ -7,12 +7,17 @@ use core::simd::num::SimdUint;
 #[cfg(any(feature = "sancov_ngram4", feature = "sancov_ctx"))]
 use libafl::executors::{hooks::ExecutorHook, HasObservers};
 
+#[cfg(any(
+    feature = "pointer_maps",
+    feature = "sancov_pcguard_edges",
+    feature = "sancov_pcguard_hitcounts"
+))]
+use crate::coverage::EDGES_MAP;
+use crate::coverage::MAX_EDGES_NUM;
 #[cfg(feature = "pointer_maps")]
 use crate::coverage::{EDGES_MAP_PTR, EDGES_MAP_PTR_NUM};
-use crate::{
-    coverage::{EDGES_MAP, MAX_EDGES_NUM},
-    EDGES_MAP_SIZE,
-};
+#[cfg(feature = "sancov_ngram4")]
+use crate::EDGES_MAP_SIZE;
 
 #[cfg(all(feature = "sancov_pcguard_edges", feature = "sancov_pcguard_hitcounts"))]
 #[cfg(not(any(doc, feature = "clippy")))]
@@ -20,91 +25,173 @@ compile_error!(
     "the libafl_targets `sancov_pcguard_edges` and `sancov_pcguard_hitcounts` features are mutually exclusive."
 );
 
+#[cfg(any(feature = "sancov_ngram4", feature = "sancov_ngram8"))]
+use core::ops::ShlAssign;
+
 #[cfg(feature = "sancov_ngram4")]
 #[rustversion::nightly]
 type Ngram4 = core::simd::u32x4;
 
+#[cfg(feature = "sancov_ngram8")]
+#[rustversion::nightly]
+type Ngram8 = core::simd::u32x8;
+
 /// The array holding the previous locs. This is required for NGRAM-4 instrumentation
 #[cfg(feature = "sancov_ngram4")]
 #[rustversion::nightly]
-pub static mut PREV_ARRAY: Ngram4 = Ngram4::from_array([0, 0, 0, 0]);
+pub static mut PREV_ARRAY_4: Ngram4 = Ngram4::from_array([0, 0, 0, 0]);
 
-/// The hook to initialize ngram everytime we run the harness
+/// The array holding the previous locs. This is required for NGRAM-4 instrumentation
+#[cfg(feature = "sancov_ngram8")]
+#[rustversion::nightly]
+pub static mut PREV_ARRAY_8: Ngram8 = Ngram8::from_array([0, 0, 0, 0, 0, 0, 0, 0]);
+
+/// We shift each of the values in ngram4 everytime we see new edges
 #[cfg(feature = "sancov_ngram4")]
 #[rustversion::nightly]
-#[derive(Default, Debug, Clone, Copy)]
-pub struct NgramHook {}
+pub static SHR_4: Ngram4 = Ngram4::from_array([1, 1, 1, 1]);
+
+/// We shift each of the values in ngram8 everytime we see new edges
+#[cfg(feature = "sancov_ngram8")]
+#[rustversion::nightly]
+pub static SHR_8: Ngram8 = Ngram8::from_array([1, 1, 1, 1, 1, 1, 1, 1]);
+
+#[cfg(any(
+    feature = "sancov_ngram4",
+    feature = "sancov_ngram8",
+    feature = "sancov_ctx"
+))]
+use core::marker::PhantomData;
+
+/// The hook to initialize ngram everytime we run the harness
+#[cfg(any(feature = "sancov_ngram4", feature = "sancov_ngram8"))]
+#[rustversion::nightly]
+#[derive(Debug, Clone, Copy)]
+pub struct NgramHook<S>
+where
+    S: libafl::inputs::UsesInput,
+{
+    phantom: PhantomData<S>,
+}
 
 /// The hook to initialize ctx everytime we run the harness
 #[cfg(feature = "sancov_ctx")]
-#[derive(Default, Debug, Clone, Copy)]
-pub struct CtxHook {}
+#[derive(Debug, Clone, Copy)]
+pub struct CtxHook<S> {
+    phantom: PhantomData<S>,
+}
 
-#[cfg(feature = "sancov_ngram4")]
-#[rustversion::nightly]
-impl ExecutorHook for NgramHook {
-    fn init<E: HasObservers, S>(&mut self, _state: &mut S) {}
-    fn pre_exec<EM, I, S, Z>(
-        &mut self,
-        _fuzzer: &mut Z,
-        _state: &mut S,
-        _mgr: &mut EM,
-        _input: &I,
-    ) {
-        unsafe {
-            PREV_ARRAY = Ngram4::from_array([0, 0, 0, 0]);
+#[cfg(feature = "sancov_ctx")]
+impl<S> CtxHook<S>
+where
+    S: libafl::inputs::UsesInput,
+{
+    /// The constructor for this struct
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            phantom: PhantomData,
         }
-    }
-    fn post_exec<EM, I, S, Z>(
-        &mut self,
-        _fuzzer: &mut Z,
-        _state: &mut S,
-        _mgr: &mut EM,
-        _input: &I,
-    ) {
     }
 }
 
 #[cfg(feature = "sancov_ctx")]
-impl ExecutorHook for CtxHook {
-    fn init<E: HasObservers, S>(&mut self, _state: &mut S) {}
-    fn pre_exec<EM, I, S, Z>(
-        &mut self,
-        _fuzzer: &mut Z,
-        _state: &mut S,
-        _mgr: &mut EM,
-        _input: &I,
-    ) {
+impl<S> Default for CtxHook<S>
+where
+    S: libafl::inputs::UsesInput,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(any(feature = "sancov_ngram4", feature = "sancov_ngram8"))]
+#[rustversion::nightly]
+impl<S> ExecutorHook<S> for NgramHook<S>
+where
+    S: libafl::inputs::UsesInput,
+{
+    fn init<E: HasObservers>(&mut self, _state: &mut S) {}
+    fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) {
+        #[cfg(feature = "sancov_ngram4")]
+        unsafe {
+            PREV_ARRAY_4 = Ngram4::from_array([0, 0, 0, 0]);
+        }
+
+        #[cfg(feature = "sancov_ngram8")]
+        unsafe {
+            PREV_ARRAY_8 = Ngram8::from_array([0, 0, 0, 0, 0, 0, 0, 0]);
+        }
+    }
+    fn post_exec(&mut self, _state: &mut S, _input: &S::Input) {}
+}
+
+#[cfg(any(feature = "sancov_ngram4", feature = "sancov_ngram8"))]
+#[rustversion::nightly]
+impl<S> NgramHook<S>
+where
+    S: libafl::inputs::UsesInput,
+{
+    /// The constructor for this struct
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            phantom: PhantomData,
+        }
+    }
+}
+
+#[cfg(any(feature = "sancov_ngram4", feature = "sancov_ngram8"))]
+#[rustversion::nightly]
+impl<S> Default for NgramHook<S>
+where
+    S: libafl::inputs::UsesInput,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "sancov_ctx")]
+impl<S> ExecutorHook<S> for CtxHook<S>
+where
+    S: libafl::inputs::UsesInput,
+{
+    fn init<E: HasObservers>(&mut self, _state: &mut S) {}
+    fn pre_exec(&mut self, _state: &mut S, _input: &S::Input) {
         unsafe {
             __afl_prev_ctx = 0;
         }
     }
-    fn post_exec<EM, I, S, Z>(
-        &mut self,
-        _fuzzer: &mut Z,
-        _state: &mut S,
-        _mgr: &mut EM,
-        _input: &I,
-    ) {
-    }
+    fn post_exec(&mut self, _state: &mut S, _input: &S::Input) {}
 }
 
 #[rustversion::nightly]
-#[cfg(feature = "sancov_ngram4")]
-unsafe fn update_ngram(mut pos: usize) -> usize {
+#[allow(unused)]
+#[inline]
+#[cfg(any(feature = "sancov_ngram4", feature = "sancov_ngram8"))]
+unsafe fn update_ngram(pos: usize) -> usize {
+    let mut reduced = pos;
     #[cfg(feature = "sancov_ngram4")]
     {
-        PREV_ARRAY = PREV_ARRAY.rotate_elements_right::<1>();
-        PREV_ARRAY.as_mut_array()[0] = pos as u32;
-        let reduced = PREV_ARRAY.reduce_xor() as usize;
-        pos ^= reduced;
-        pos %= EDGES_MAP_SIZE;
+        PREV_ARRAY_4 = PREV_ARRAY_4.rotate_elements_right::<1>();
+        PREV_ARRAY_4.shl_assign(SHR_4);
+        PREV_ARRAY_4.as_mut_array()[0] = pos as u32;
+        reduced = PREV_ARRAY_4.reduce_xor() as usize;
     }
-    pos
+    #[cfg(feature = "sancov_ngram8")]
+    {
+        PREV_ARRAY_8 = PREV_ARRAY_8.rotate_elements_right::<1>();
+        PREV_ARRAY_8.shl_assign(SHR_8);
+        PREV_ARRAY_8.as_mut_array()[0] = pos as u32;
+        reduced = PREV_ARRAY_8.reduce_xor() as usize;
+    }
+    reduced %= EDGES_MAP_SIZE;
+    reduced
 }
 
 #[rustversion::not(nightly)]
-#[cfg(feature = "sancov_ngram4")]
+#[cfg(any(feature = "sancov_ngram4", feature = "sancov_ngram8"))]
 unsafe fn update_ngram(pos: usize) -> usize {
     pos
 }
@@ -122,9 +209,10 @@ extern "C" {
 #[no_mangle]
 #[allow(unused_assignments)]
 pub unsafe extern "C" fn __sanitizer_cov_trace_pc_guard(guard: *mut u32) {
+    #[allow(unused_mut)]
     let mut pos = *guard as usize;
 
-    #[cfg(feature = "sancov_ngram4")]
+    #[cfg(any(feature = "sancov_ngram4", feature = "sancov_ngram8"))]
     {
         pos = update_ngram(pos);
         // println!("Wrinting to {} {}", pos, EDGES_MAP_SIZE);
