@@ -1,9 +1,12 @@
 use std::{
+    collections::HashMap,
+    fs,
     hash::{BuildHasher, Hasher},
     path::PathBuf,
 };
 
 use ahash::RandomState;
+use goblin::elf::Elf;
 use libafl::{
     executors::ExitKind,
     inputs::{Input, UsesInput},
@@ -36,6 +39,7 @@ where
     #[serde(skip)]
     // I'm not sure when the observers are serialized, but I don't want to serialize this
     ranges: RangeMap<usize, (u16, String)>,
+    curr_mod_offset: usize,
 }
 
 impl<S, M> Observer<S> for AccMapObserver<M>
@@ -94,12 +98,10 @@ where
                     if self.acc[i] == 0 {
                         continue;
                     }
-                    // We create a fake BB here, as we don't have the real ones
-                    // This is just to have a valid drcov file
-                    // The real addresses will be set by post-processing
+                    // The addresses from PCTable are off by the address of the .init section
                     drcov_basic_blocks.push(DrCovBasicBlock {
-                        start: pc_table[i].addr(),
-                        end: pc_table[i].addr() + 1, // TODO - this is not correct, but it's just a placeholder
+                        start: pc_table[i].addr() + self.curr_mod_offset,
+                        end: pc_table[i].addr() + self.curr_mod_offset + 1, // TODO - this is not correct, but it's just a placeholder
                     });
 
                     bb_counters.push(self.acc[i]);
@@ -270,6 +272,97 @@ pub fn collect_modules() -> Result<RangeMap<usize, (u16, String)>, ()> {
     Ok(ranges)
 }
 
+// fn get_string_table_entry(elf: &Elf, index: usize) -> Option<String> {
+//     if let Some(section_header) = elf.section_headers.get(index) {
+//         if section_header.sh_type == goblin::elf::section_header::SHT_STRTAB {
+//             let string_table_offset = section_header.sh_offset as usize;
+//             let string_table_size = section_header.sh_size as usize;
+//             if let Ok(name) = std::str::from_utf8(string_table) {
+//                 return Some(name.to_string());
+//             }
+//             if let Ok(name) = std::str::from_utf8(string_table) {
+//                 return Some(name.to_string());
+//             }
+//         }
+//     }
+//     None
+// }
+
+fn collect_module_offsets() -> Result<HashMap<String, usize>, ()> {
+    let mut offsets = HashMap::new();
+    #[cfg(windows)]
+    {
+        // Windows-specific implementation here
+    }
+
+    #[cfg(unix)]
+    {
+        // Unix-specific implementation here
+        use std::{
+            fs::File,
+            io::{BufRead, BufReader},
+        };
+
+        let file = File::open("/proc/self/maps");
+        if file.is_err() {
+            return Err(());
+        }
+        let reader = BufReader::new(file.unwrap());
+
+        for line in reader.lines() {
+            if line.is_err() {
+                continue;
+            }
+            let line = line.unwrap();
+            log::info!("Line: {}", line);
+            let parts: Vec<&str> = line.split_whitespace().collect();
+
+            if parts.len() < 6 {
+                continue;
+            }
+
+            let range_parts: Vec<&str> = parts[0].split('-').collect();
+            if range_parts.len() != 2 {
+                continue;
+            }
+
+            // Ignore the module if it is not executable
+            if !parts[1].contains('x') {
+                continue;
+            }
+            let start = usize::from_str_radix(range_parts[0], 16).map_err(|_| ())?;
+            let name = parts[5].to_string();
+
+            log::info!("Module: {} - 0x{:x}", name, start);
+
+            // The offset of the `.init` section as specified in the ELF header
+            // Read the binary file into a byte array
+            if let Ok(buffer) = fs::read(name.clone()) {
+                // Parse the buffer as an ELF binary
+                if let Ok(elf) = Elf::parse(&buffer) {
+                    // Iterate over section headers to find the .init section
+                    for sh in elf.section_headers {
+                        let offset = sh.sh_offset as usize;
+                        if let Some(section_name) = elf.shdr_strtab.get_at(sh.sh_name as usize) {
+                            if section_name == ".init" {
+                                log::info!(
+                                    "Module: {} - 0x{:x} - 0x{:x}",
+                                    name.clone(),
+                                    start,
+                                    offset
+                                );
+                                offsets.insert(name.clone(), offset);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(offsets)
+}
+
 impl<M> AccMapObserver<M>
 where
     M: Serialize + serde::de::DeserializeOwned + AsMutSlice<Entry = u8> + HasLen,
@@ -282,6 +375,19 @@ where
         std::fs::create_dir_all(&coverage_directory)
             .expect("failed to create directory for coverage files");
 
+        let ranges = collect_modules().unwrap();
+        let mod_offsets = collect_module_offsets().unwrap();
+        // Find the current function address
+        let curr_mod_func_addr = collect_module_offsets as *const () as usize;
+        // Find the module name of the current function in ranges
+        let curr_mod_name = &ranges.get(&curr_mod_func_addr).unwrap().1;
+        // Find the offset of the current module, if it exists
+        let curr_mod_offset = mod_offsets.get(&curr_mod_name as &str).unwrap_or(&0);
+        log::info!(
+            "Current module {} offset: 0x{:x}",
+            curr_mod_name,
+            curr_mod_offset.clone()
+        );
         // I'm not sure this is the correct place to initialize the ranges
         // I guess the case of a out-of-proc-server is not handled here,
         // but I will get to it later.
@@ -293,7 +399,8 @@ where
             cnt: 0,
             max_cnt: 0,
             stored_cnt: 0,
-            ranges: collect_modules().unwrap(),
+            ranges: ranges,
+            curr_mod_offset: curr_mod_offset.clone(),
         }
     }
 

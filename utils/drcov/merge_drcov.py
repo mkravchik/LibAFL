@@ -361,6 +361,11 @@ if __name__ == "__main__":
     convert_parser.add_argument("-o", "--output", required=True, help="Output drcov file")
     convert_parser.add_argument("-d", "--allow-duplicates", action="store_true", help="Allow duplicate basic blocks in the output file")
 
+    # Add a parser for the 'symbolize' command
+    convert_parser = subparsers.add_parser('symbolize')
+    convert_parser.add_argument("-i", "--input", required=True, help="Input JSON file")
+    convert_parser.add_argument("-s", "--symbolizer", help="LLVM Symbolizer", default="llvm-symbolizer")
+
     args = parser.parse_args()
 
     verbose = args.verbose
@@ -374,5 +379,24 @@ if __name__ == "__main__":
             writer.add_bb(bb)                   
 
         writer.write()
+    elif args.command == "symbolize":
+        # check whether llvm-symbolizer is available
+        if not os.path.exists(args.symbolizer):
+            print(f"Symbolizer {args.symbolizer} not found")
+            exit(1)
+
+        with open(args.input, "r") as f:
+            data = json.load(f)
+            for k, v in data["bb_counters"].items():
+                mod_path = data["modules"][k]["path"]
+                print(f"Module {k}: ")
+                for k1, v1 in v.items():
+                    # Run llvm-symbolizer and capture its output
+                    cmd = f"{args.symbolizer} -e={mod_path} --functions=linkage --inlining=false {k1}"
+                    p = os.popen(cmd)
+                    output = p.read()
+                    p.close()
+                    print(f"  {k1}: {v1} times")
+                    print(output)
     else:
         merge_drcov(args.directory, args.aggregate, args.keep, args.output_directory, args.counters)
