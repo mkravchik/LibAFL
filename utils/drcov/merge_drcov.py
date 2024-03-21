@@ -8,6 +8,10 @@ import json
 import tqdm
 from ctypes import *
 from collections import defaultdict
+from capstone import *
+from elftools.elf.elffile import ELFFile
+from typing import Tuple
+
 
 verbose = False
 # DrCov file writer based on 
@@ -200,6 +204,89 @@ class DrcovFile:
         self._write_bbs()
         self.file.close()
 
+# A class that can return the basic block size in a given module
+class DrcovBasicBlockSizeCalculator:
+    def __init__(self, file_name):
+        self.file = file_name
+        # read the ELF header, find the address of the .text section and read it into memory
+        self.code_offset, self.text_data, self.trace_address = self._read_text_section()
+        self.bbs = {}
+        self.disasm = Cs(CS_ARCH_X86, CS_MODE_64)
+        self.trace_address = 0x0
+
+    def _read_text_section(self) -> Tuple[int, bytes, int]:
+        with open(self.file, 'rb') as f:
+            elffile = ELFFile(f)
+
+            # Find the .text section
+            text_section = None
+            for section in elffile.iter_sections():
+                if section.name == '.text':
+                    text_section = section
+                    break
+
+            if text_section is None:
+                print(f"No .text section found in {self.file}")
+                return 0, None
+
+            # Read the .text section into memory
+            text_data = text_section.data()
+
+            trace_address = 0
+            # find the address of the `__sanitizer_cov_trace_pc_guard`
+            symtab = elffile.get_section_by_name('.symtab')  # Get the symbol table
+            if not symtab:
+                print("Symbol table not found.")
+                return None
+            
+            for symbol in symtab.iter_symbols():
+                if symbol.name == '__sanitizer_cov_trace_pc_guard':
+                    trace_address = symbol['st_value']
+                    break
+
+            return text_section.header.sh_offset, text_data, trace_address
+
+    def find_basic_block_size(self, data, address):
+        """
+        Determine the size of a basic block given its start address using Capstone.
+        
+        data: The binary data as bytes.
+        address: The starting address of the basic block.
+        """
+        def is_end_of_basic_block(instr, ignore_calls_addr) -> bool:
+            """
+            Determines if an instruction is typically the end of a basic block.
+            """
+            # Examples of instructions that could signify the end of a basic block
+            # This is a simplified check; more complex logic might be needed for a comprehensive analysis
+            if instr.mnemonic == 'call' and int(instr.op_str,16) == ignore_calls_addr:
+                return False
+            return instr.mnemonic in ('ret', 'jmp', 'call', 'jne', 'je', 'jg', 'jl', 'jo', 'jno', 'jp', 'jnp', 'jz', 'jnz')
+
+        offset = 0
+        size = 0
+        
+        for instr in self.disasm.disasm(data, address):
+            # print(f"0x{instr.address:x}:\t{instr.mnemonic}\t{instr.op_str}")
+            size += instr.size
+            offset += instr.size
+            if is_end_of_basic_block(instr, self.trace_address):
+                break
+                
+        return size
+
+    def get_bb_size(self, bb_start):
+        if bb_start in self.bbs:
+            return self.bbs[bb_start]
+
+        bb_size = self.find_basic_block_size(
+            memoryview(self.text_data)[bb_start - self.code_offset:],
+            bb_start
+        )
+
+        self.bbs[bb_start] = bb_size
+        return bb_size
+
 def generate_merged_file_name(base_file, aggregate, base_dir=None):
     if base_dir is None:
         # Get the base file directory
@@ -230,7 +317,7 @@ def create_merged_drcov_writer(base_file_name, aggregate, base_dir=None):
         print("Output file:", output_file)
     return DrcovFile(output_file)
 
-def merge_drcov(directory, aggregate, keep=False, output_directory=None, counters=False):
+def merge_drcov(directory, aggregate, keep=False, output_directory=None, counters=False, fix_sizes=False):
     # Start measuring the time
     start_time = time.time()
 
@@ -244,6 +331,7 @@ def merge_drcov(directory, aggregate, keep=False, output_directory=None, counter
     writer = create_merged_drcov_writer(files[0], aggregate, output_directory)
     bb_counters = defaultdict(dict)
     modules = {}
+    bb_size_calcs = {}
 
     def write_results():
         # use the outer scope variables
@@ -317,9 +405,14 @@ def merge_drcov(directory, aggregate, keep=False, output_directory=None, counter
             for m in mods:
                 writer.add_module(m.id, m.path, m.base, m.end)
                 modules[m.id] = {"path": m.path, "base": hex(m.base), "end": hex(m.end)}
-        for bb in DrcovData.bbs:
+                if fix_sizes and m.id not in bb_size_calcs and m.id == 0: # an optimization, we don't need to calculate the size of the basic blocks for all modules
+                    bb_size_calcs[m.id] = DrcovBasicBlockSizeCalculator(m.path)
+
+        for bb in tqdm.tqdm(DrcovData.bbs):
             if verbose:
                 print(f"{hex(bb.start), hex(bb.size)}")
+            if fix_sizes and bb.size == 1 and bb.mod_id in bb_size_calcs:
+                bb.size = bb_size_calcs[bb.mod_id].get_bb_size(bb.start)
             bb_exists = writer.add_bb(bb)  
             if counters:
                 def get_bb_counter(bb):
@@ -343,6 +436,103 @@ def merge_drcov(directory, aggregate, keep=False, output_directory=None, counter
     end_time = time.time()
     print("Elapsed time:", end_time - start_time)
 
+def symbolize(args):
+    # check whether llvm-symbolizer is available
+    if not os.path.exists(args.symbolizer):
+        print(f"Symbolizer {args.symbolizer} not found")
+        exit(1)
+    
+    if args.coverage_info is not None:
+        # Create a dictionary of files, lines, and their execution counts
+        coverage_info = defaultdict(lambda: defaultdict(int))
+        if not os.path.exists(args.coverage_info):
+            print(f"Coverage info file {args.coverage_info} not found")
+            exit(1)
+
+        # Read the coverage info file
+        with open(args.coverage_info, "r") as f:
+            """
+            The coverage.info file has the following format:
+            SF:<path to source file>
+            FN:<function name>
+            FNDA:<function name>:<count>
+            DA:<line number>,<execution count>[,<checksum>]
+            LF:<line number>,<execution count>
+            end_of_record # terminates the file
+
+            In the files generated by drcov2cov only S and DA records are present
+            """
+            curr_file = None
+            for i, line in enumerate(f):
+                if line.startswith("SF:"):
+                    curr_file = line.split(":")[1].strip()
+                    coverage_info[curr_file] = defaultdict(int)
+                elif line.startswith("DA:"):
+                    if curr_file is None:
+                        print(f"Error: DA record found before SF record at line {i} in {args.coverage_info} file")
+                        exit(1)
+                    parts = line.split(":")[1].split(",")
+                    file_line = int(parts[0])
+                    count = int(parts[1])
+                    coverage_info[curr_file][file_line] = count
+                elif line.startswith("end_of_record"):
+                    curr_file = None
+
+    with open(args.input, "r") as f:
+        data = json.load(f)
+        for k, v in data["bb_counters"].items():
+            mod_path = data["modules"][k]["path"]
+            if args.verbose:
+                print(f"Module {k}: ")
+            for k1, v1 in v.items():
+                # Run llvm-symbolizer and capture its output
+                cmd = f"{args.symbolizer} -e={mod_path} --functions=linkage --inlining=false {k1}"
+                p = os.popen(cmd)
+                output = p.read()
+                p.close()
+                if args.verbose:
+                    print(f"  {k1}: {v1} times")
+                    print(output)
+                if coverage_info is not None:
+                    # The llvm-symbolizer output is in the following format:
+                    # <function name>\n<source file>:<line number>:<column number>\n\n
+                    # We need to extract the source file and line number
+                    lines = output.split("\n")
+
+                    # Note that we currently discard the function information
+                    # Maybe we could add it, but I havent looked at this yet
+                    parts = lines[1].strip().split(":")
+                    if len(parts) > 1:
+                        file = parts[0].strip()
+                        line = int(parts[1].strip())
+                        # NOTE - we don't have a way to reflect the column number in the coverage.info file
+                        if file in coverage_info:
+                            if line not in coverage_info[file]:
+                                if args.verbose:
+                                    print(f"    Line {line} not found in coverage info file, adding it")
+                            coverage_info[file][line] = v1
+                            if args.verbose: 
+                                print(f"    Line {line}: {coverage_info[file][line]} times")
+                        else:
+                            coverage_info[file] = defaultdict(int)
+                            coverage_info[file][line] = v1
+
+    if args.coverage_info is not None:
+        if args.coverage_info_output is None:
+            args.coverage_info_output = args.coverage_info
+            print(f"Overwriting {args.coverage_info} file")
+        else:
+            print(f"Writing to {args.coverage_info_output} file")
+        # Write the updated coverage info file
+        with open(args.coverage_info_output, "w") as f:
+            for file, lines in coverage_info.items():
+                f.write(f"SF:{file}\n")
+                sorted_lines = sorted(lines.items(), key=lambda x: x[0])
+                for line, count in sorted_lines:
+                    f.write(f"DA:{line},{count}\n")
+                f.write("end_of_record\n")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Utility to merge files in DrCov format")
     parser.add_argument("-d", "--directory", type=str, help="Directory to process", default=".")
@@ -352,6 +542,7 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     # Generate block counters for a merged file
     parser.add_argument("-c", "--counters", action="store_true", help="Generate block counters for a merged file")
+    parser.add_argument("-f", "--fix-sizes", action="store_true", help="Disaasembles the .text section of the module and fixes the basic block sizes in the drcov file")
 
     subparsers = parser.add_subparsers(dest='command')
 
@@ -362,9 +553,12 @@ if __name__ == "__main__":
     convert_parser.add_argument("-d", "--allow-duplicates", action="store_true", help="Allow duplicate basic blocks in the output file")
 
     # Add a parser for the 'symbolize' command
-    convert_parser = subparsers.add_parser('symbolize')
-    convert_parser.add_argument("-i", "--input", required=True, help="Input JSON file")
-    convert_parser.add_argument("-s", "--symbolizer", help="LLVM Symbolizer", default="llvm-symbolizer")
+    symbolize_parser = subparsers.add_parser('symbolize')
+    symbolize_parser.add_argument("-i", "--input", required=True, help="Input JSON file")
+    symbolize_parser.add_argument("-s", "--symbolizer", help="LLVM Symbolizer", default="llvm-symbolizer")
+    symbolize_parser.add_argument("-c", "--coverage-info", help="The name of input coverage.info")
+    symbolize_parser.add_argument("-co", "--coverage-info-output", help="The name of input coverage.info. If not specified, the input file will be overwritten.")
+    symbolize_parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
 
     args = parser.parse_args()
 
@@ -380,23 +574,6 @@ if __name__ == "__main__":
 
         writer.write()
     elif args.command == "symbolize":
-        # check whether llvm-symbolizer is available
-        if not os.path.exists(args.symbolizer):
-            print(f"Symbolizer {args.symbolizer} not found")
-            exit(1)
-
-        with open(args.input, "r") as f:
-            data = json.load(f)
-            for k, v in data["bb_counters"].items():
-                mod_path = data["modules"][k]["path"]
-                print(f"Module {k}: ")
-                for k1, v1 in v.items():
-                    # Run llvm-symbolizer and capture its output
-                    cmd = f"{args.symbolizer} -e={mod_path} --functions=linkage --inlining=false {k1}"
-                    p = os.popen(cmd)
-                    output = p.read()
-                    p.close()
-                    print(f"  {k1}: {v1} times")
-                    print(output)
+        symbolize(args)
     else:
-        merge_drcov(args.directory, args.aggregate, args.keep, args.output_directory, args.counters)
+        merge_drcov(args.directory, args.aggregate, args.keep, args.output_directory, args.counters, args.fix_sizes)
