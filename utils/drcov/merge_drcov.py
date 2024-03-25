@@ -24,11 +24,12 @@ class HashableDrcovBasicBlock(drcov.DrcovBasicBlock):
         self.size = block.size
 
     def __hash__(self):
-        return hash((self.start, self.size, self.mod_id))
+        # I remove the size from the hash, beacuse we don't know it when using PCTable and fix later
+        return hash((self.start, self.mod_id))
 
     def __eq__(self, other):
         if isinstance(other, HashableDrcovBasicBlock):
-            return self.start == other.start and self.size == other.size and self.mod_id == other.mod_id
+            return self.start == other.start and self.mod_id == other.mod_id
         return False
 
 class DrcovBasicBlockWithCounter(Structure):
@@ -212,7 +213,6 @@ class DrcovBasicBlockSizeCalculator:
         self.code_offset, self.text_data, self.trace_address = self._read_text_section()
         self.bbs = {}
         self.disasm = Cs(CS_ARCH_X86, CS_MODE_64)
-        self.trace_address = 0x0
 
     def _read_text_section(self) -> Tuple[int, bytes, int]:
         with open(self.file, 'rb') as f:
@@ -240,6 +240,7 @@ class DrcovBasicBlockSizeCalculator:
                 return None
             
             for symbol in symtab.iter_symbols():
+                # print(symbol.name)
                 if symbol.name == '__sanitizer_cov_trace_pc_guard':
                     trace_address = symbol['st_value']
                     break
@@ -259,8 +260,13 @@ class DrcovBasicBlockSizeCalculator:
             """
             # Examples of instructions that could signify the end of a basic block
             # This is a simplified check; more complex logic might be needed for a comprehensive analysis
-            if instr.mnemonic == 'call' and int(instr.op_str,16) == ignore_calls_addr:
-                return False
+            if instr.mnemonic == 'call':
+                try:
+                    if int(instr.op_str, 16) == ignore_calls_addr:
+                        return False
+                except ValueError:
+                    # Keep going
+                    pass
             return instr.mnemonic in ('ret', 'jmp', 'call', 'jne', 'je', 'jg', 'jl', 'jo', 'jno', 'jp', 'jnp', 'jz', 'jnz')
 
         offset = 0
@@ -436,6 +442,62 @@ def merge_drcov(directory, aggregate, keep=False, output_directory=None, counter
     end_time = time.time()
     print("Elapsed time:", end_time - start_time)
 
+"""
+A class that uses pyelftools to return the file and line of a given address in a given executable
+TODO - This is not working correctly, need to fix it. 
+I wanted to parse the Elf once to save time, but the filenames for the embedded library code are all wrong
+Some addresses could not be found so there is a need to find the closest address as well
+"""
+# from elftools.elf.elffile import ELFFile
+# from elftools.dwarf.dwarfinfo import DWARFInfo
+# from elftools.dwarf.descriptions import describe_DWARF_expr
+
+# class ElfAddressToLine:
+#     def __init__(self, file_name, verbose=False):
+#         self.file_name = file_name
+#         with open(file_name, 'rb') as f:
+#             self.elffile = ELFFile(f)
+#             self.dwarfinfo = self.elffile.get_dwarf_info()
+#             self.addresses = {}
+#             self.verbose = verbose
+#             self._read_line_table()
+
+#     def _read_line_table(self):
+#         if self.dwarfinfo is None:
+#             print(f"ELF file {self.file_name} has no DWARF info.")
+#             return
+        
+#         # Iterate over all the compilation units in the DWARF information
+#         print(f"Processing DWARF info for {self.file_name}")
+#         for CU in tqdm.tqdm(self.dwarfinfo.iter_CUs()):
+#             if self.verbose:
+#                 print(f"Processing CU: {CU.get_top_DIE().attributes['DW_AT_name'].value.decode('utf-8')}")
+#             try:
+#                 line_program = self.dwarfinfo.line_program_for_CU(CU)
+
+#                 # Look for the address in the line program's sequence
+#                 for entry in line_program.get_entries():
+#                     if entry.state is None:
+#                         continue
+#                     if entry.state.address is not None:
+#                         filename = line_program.header.file_entry[entry.state.file - 1].name.decode('utf-8')
+#                         line = entry.state.line
+#                         self.addresses[entry.state.address] = (filename, line)
+#             except Exception as e:
+#                 print(f"Error processing CU: {e}")
+#                 continue
+
+
+#     def get_file_line(self, address):
+#         if self.addresses is None:
+#             return None, None
+#         if address in self.addresses:
+#             return self.addresses[address]
+#         else:
+#             print(f"Address {hex(address)} not found in {self.file_name}")
+#         # TODO - find the closest address
+#         return None, None
+
 def symbolize(args):
     # check whether llvm-symbolizer is available
     if not os.path.exists(args.symbolizer):
@@ -478,10 +540,12 @@ def symbolize(args):
                 elif line.startswith("end_of_record"):
                     curr_file = None
 
+    py_symbolizers = {}
     with open(args.input, "r") as f:
         data = json.load(f)
         for k, v in data["bb_counters"].items():
             mod_path = data["modules"][k]["path"]
+
             if args.verbose:
                 print(f"Module {k}: ")
             for k1, v1 in v.items():
@@ -516,7 +580,12 @@ def symbolize(args):
                         else:
                             coverage_info[file] = defaultdict(int)
                             coverage_info[file][line] = v1
-
+                        
+                        # # Symbolize using pyelftools
+                        # pfile, pline = py_symbolizers[mod_path].get_file_line(int(k1, 16))
+                        # if args.verbose: 
+                        #     print(f" Python Symbolizers:   {pfile}: {pline}")
+                        
     if args.coverage_info is not None:
         if args.coverage_info_output is None:
             args.coverage_info_output = args.coverage_info
@@ -542,7 +611,7 @@ if __name__ == "__main__":
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     # Generate block counters for a merged file
     parser.add_argument("-c", "--counters", action="store_true", help="Generate block counters for a merged file")
-    parser.add_argument("-f", "--fix-sizes", action="store_true", help="Disaasembles the .text section of the module and fixes the basic block sizes in the drcov file")
+    parser.add_argument("-f", "--fix-sizes", action="store_true", help="Disassembles the .text section of the module and fixes the basic block sizes in the drcov file")
 
     subparsers = parser.add_subparsers(dest='command')
 
