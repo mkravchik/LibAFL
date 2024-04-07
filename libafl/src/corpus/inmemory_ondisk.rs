@@ -304,7 +304,7 @@ where
 
                 // Try to create lock file for new testcases
                 if OpenOptions::new()
-                    .create(true)
+                    .create_new(true)
                     .write(true)
                     .open(self.dir_path.join(new_lock_filename))
                     .is_err()
@@ -439,7 +439,7 @@ where
 }
 
 #[cfg(feature = "python")]
-#[allow(clippy::unnecessary_fallible_conversions)]
+#[allow(clippy::unnecessary_fallible_conversions, unused_qualifications)]
 /// `InMemoryOnDiskCorpus` Python bindings
 pub mod pybind {
     use alloc::string::String;

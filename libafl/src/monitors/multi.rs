@@ -1,9 +1,6 @@
 //! Monitor to display both cumulative and per-client monitor
 
-use alloc::{
-    string::{String, ToString},
-    vec::Vec,
-};
+use alloc::{string::String, vec::Vec};
 use core::{
     fmt::{Debug, Formatter, Write},
     time::Duration,
@@ -18,7 +15,7 @@ use crate::monitors::{ClientStats, Monitor};
 #[derive(Clone)]
 pub struct MultiMonitor<F>
 where
-    F: FnMut(String),
+    F: FnMut(&str),
 {
     print_fn: F,
     start_time: Duration,
@@ -28,7 +25,7 @@ where
 
 impl<F> Debug for MultiMonitor<F>
 where
-    F: FnMut(String),
+    F: FnMut(&str),
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("MultiMonitor")
@@ -40,7 +37,7 @@ where
 
 impl<F> Monitor for MultiMonitor<F>
 where
-    F: FnMut(String),
+    F: FnMut(&str),
 {
     /// the client monitor, mutable
     fn client_stats_mut(&mut self) -> &mut Vec<ClientStats> {
@@ -66,7 +63,7 @@ where
         self.aggregator.aggregate(name, &self.client_stats);
     }
 
-    fn display(&mut self, event_msg: String, sender_id: ClientId) {
+    fn display(&mut self, event_msg: &str, sender_id: ClientId) {
         let sender = format!("#{}", sender_id.0);
         let pad = if event_msg.len() + sender.len() < 13 {
             " ".repeat(13 - event_msg.len() - sender.len())
@@ -84,13 +81,11 @@ where
             self.total_execs(),
             self.execs_per_sec_pretty()
         );
-        let mut aggregated_fmt = " (Aggregated):".to_string();
         for (key, val) in &self.aggregator.aggregated {
-            write!(aggregated_fmt, " {key}: {val}").unwrap();
+            write!(global_fmt, ", {key}: {val}").unwrap();
         }
-        write!(global_fmt, "{aggregated_fmt}").unwrap();
 
-        (self.print_fn)(global_fmt);
+        (self.print_fn)(&global_fmt);
 
         self.client_stats_insert(sender_id);
         let client = self.client_stats_mut_for(sender_id);
@@ -105,7 +100,7 @@ where
         for (key, val) in &client.user_monitor {
             write!(fmt, ", {key}: {val}").unwrap();
         }
-        (self.print_fn)(fmt);
+        (self.print_fn)(&fmt);
 
         // Only print perf monitor if the feature is enabled
         #[cfg(feature = "introspection")]
@@ -113,18 +108,18 @@ where
             // Print the client performance monitor. Skip the Client 0 which is the broker
             for (i, client) in self.client_stats.iter().skip(1).enumerate() {
                 let fmt = format!("Client {:03}:\n{}", i + 1, client.introspection_monitor);
-                (self.print_fn)(fmt);
+                (self.print_fn)(&fmt);
             }
 
             // Separate the spacing just a bit
-            (self.print_fn)("\n".to_string());
+            (self.print_fn)("\n");
         }
     }
 }
 
 impl<F> MultiMonitor<F>
 where
-    F: FnMut(String),
+    F: FnMut(&str),
 {
     /// Creates the monitor, using the `current_time` as `start_time`.
     pub fn new(print_fn: F) -> Self {

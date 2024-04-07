@@ -79,3 +79,33 @@ By restarting the actual fuzzer, it can recover from these exit conditions.
 
 In any real-world scenario, you should use `taskset` to pin each client to an empty CPU core, the lib does not pick an empty core automatically (yet).
 
+## Saving precise BB hitcounts in DrCov format
+The sample illustrates how can one save the precise number of hitcounts during fuzzing campain.
+The counters are saved in the `coverage` directory in the standard format of drcov. 
+As DrCov usually keeps a BB once regardless of how many times it was hit, we augment .drcov files with drcov.cnt files 
+that keep the counters for each BB.
+In order to keep the performance penalty low, the files can be saved once in X iteration, controlled by a command line option.
+The accumulated counters are created by the `AccMapObserver` that collectes the data from the same in-memory map the regular coverage uses.
+In order to enable the collection, set the following compilation options (see `libafl_cc.rs`): `-fsanitize-coverage=pc-table,bb,trace-pc-guard`
+In order to turn the collection on use the `--save-bb-coverage` option.
+The `--drcov-max-execution-cnt` sets the saving threshold:
+`./fuzzer_libpng --save-bb-coverage --drcov-max-execution-cnt 100000 2>/dev/null`
+
+In order to get the counters per BB, use the merge_drcov tool:
+`python3 ../../utils/drcov/merge_drcov.py -d ./coverage -c`
+
+If you want to further convert the drcov files to lcov and html, you should consider fixing the BB sizes during the conversion. 
+When the data is collected, the BB sizes are not known and can be fixed by merge_drcov.py by using `-f` option.
+This incurs time penalty, but the generated HTML reflect the executed lines more correctly.
+If -f is not used , only the first line of each BB will be shown as executed.
+
+### Notes:
+1. As of now, the coverage map keeps 1 byte per BB. So if a BB was hit more than 256 times per input, this will not be reflected correctly.
+2. The code was tested on Linux only
+3. The `DrCov` files produced by the `merge_drcov` are valid and can be processed by tools such as `drcov2lcov`. Please use the latest
+version of drcov2lcov, release `10.0.0` has bugs. Specifically, the release `10.0.19798` was tested and works. It is recommended to run it as below in order to focus only on the libpng sources:
+`~/Downloads/DynamoRIO-Linux-10.0.19798/tools/bin64/drcov2lcov -input ./coverage/merged.drcov -output ./coverage.info -src_filter libpng-1.6.37`
+4. DrCov does not keep the executions count in its data, but genhtml can display it if specified. In order to generate coverage info including the counters,
+use the `symbolize` command of the merge_drcov. This requires llvm-symbolizer installed and should be done with the `coverage.info`` produced by drcov2lcov.
+`python3 ../../utils/drcov/merge_drcov.py symbolize -i ./coverage/merged.drcov.json -s /usr/lib/llvm-17/bin/llvm-symbolizer -c ./coverage.info -co ./coverage.cnt.info `
+5. You can convert the generated coverage.info into html using genhtml tool like this: `perl ~/dynamorio/third_party/lcov/genhtml --ignore-errors=source ./coverage.cnt.info -o /tmp/cov`. Browse to `/tmp/cov/index.html` to view the files.

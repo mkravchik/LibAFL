@@ -13,7 +13,7 @@ use clap::{self, Parser};
 use libafl::{
     corpus::{Corpus, InMemoryOnDiskCorpus, OnDiskCorpus},
     events::{launcher::Launcher, EventConfig, EventRestarter, LlmpRestartingEventManager},
-    executors::{inprocess::InProcessExecutor, ExitKind, TimeoutExecutor},
+    executors::{inprocess::InProcessExecutor, ExitKind},
     feedback_or, feedback_or_fast,
     feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback, TimeoutFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
@@ -151,8 +151,8 @@ pub extern "C" fn libafl_main() {
     );
 
     let mut run_client = |state: Option<_>,
-                          mut restarting_mgr: LlmpRestartingEventManager<_, _>,
-                          _core_id| {
+                          mut restarting_mgr: LlmpRestartingEventManager<_, _, _>,
+                          core_id| {
         // Create an observation channel using the coverage map
         let edges_observer = HitcountsMapObserver::new(unsafe { std_edges_map_observer("edges") });
 
@@ -222,18 +222,14 @@ pub extern "C" fn libafl_main() {
         };
 
         // Create the executor for an in-process function with one observer for edge coverage and one for the execution time
-        let mut executor = TimeoutExecutor::new(
-            InProcessExecutor::new(
-                &mut harness,
-                tuple_list!(edges_observer, time_observer),
-                &mut fuzzer,
-                &mut state,
-                &mut restarting_mgr,
-            )?,
-            // 10 seconds timeout
+        let mut executor = InProcessExecutor::with_timeout(
+            &mut harness,
+            tuple_list!(edges_observer, time_observer),
+            &mut fuzzer,
+            &mut state,
+            &mut restarting_mgr,
             opt.timeout,
-        );
-
+        )?;
         // The actual target run starts here.
         // Call LLVMFUzzerInitialize() if present.
         let args: Vec<String> = env::args().collect();
@@ -244,7 +240,14 @@ pub extern "C" fn libafl_main() {
         // In case the corpus is empty (on first run), reset
         if state.must_load_initial_inputs() {
             state
-                .load_initial_inputs(&mut fuzzer, &mut executor, &mut restarting_mgr, &opt.input)
+                .load_initial_inputs_multicore(
+                    &mut fuzzer,
+                    &mut executor,
+                    &mut restarting_mgr,
+                    &opt.input,
+                    &core_id,
+                    &cores,
+                )
                 .unwrap_or_else(|_| panic!("Failed to load initial corpus at {:?}", &opt.input));
             println!("We imported {} inputs from disk.", state.corpus().count());
         }

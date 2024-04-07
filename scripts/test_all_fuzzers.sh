@@ -4,6 +4,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 cd "$SCRIPT_DIR/.." || exit 1
 # TODO: This should be rewritten in rust, a Makefile, or some platform-independent language
 
+
 if [[ -z "${RUN_ON_CI}" ]]; then
     fuzzers=$(find ./fuzzers -mindepth 1 -maxdepth 1 -type d)
     backtrace_fuzzers=$(find ./fuzzers/backtrace_baby_fuzzers -mindepth 1 -maxdepth 1 -type d)
@@ -15,12 +16,21 @@ else
     export PROFILE_DIR=debug
 fi
 
-if [[ -z "${RUN_QEMU_FUZZER}" ]]; then
-    fuzzers=$(echo "$fuzzers" | tr ' ' '\n' | grep -v "qemu")
-    backtrace_fuzzers=$(echo "$backtrace_fuzzers" | tr ' ' '\n' | grep -v "qemu")
-else
+if [[ -n "${RUN_FUZZBENCH_FUZZER}" ]]; then
+    fuzzers=$(echo "$fuzzers" | tr ' ' '\n' | grep "fuzzbench")
+    backtrace_fuzzers=$(echo "$backtrace_fuzzers" | tr ' ' '\n' | grep "fuzzbench")
+elif [[ -n "${RUN_QEMU_FUZZER}" ]]; then
     fuzzers=$(echo "$fuzzers" | tr ' ' '\n' | grep "qemu")
     backtrace_fuzzers=$(echo "$backtrace_fuzzers" | tr ' ' '\n' | grep "qemu")
+elif [[ -n "${RUN_BABY_FUZZER}" ]]; then
+    fuzzers=$(echo "$fuzzers" | tr ' ' '\n' | grep "baby")
+    backtrace_fuzzers=$(echo "$backtrace_fuzzers" | tr ' ' '\n' | grep "baby")
+elif [[ -n "${RUN_LIBPNG_FUZZER}" ]]; then
+    fuzzers=$(echo "$fuzzers" | tr ' ' '\n' | grep "libpng")
+    backtrace_fuzzers=$(echo "$backtrace_fuzzers" | tr ' ' '\n' | grep "libpng")
+else
+    fuzzers=$(echo "$fuzzers" | tr ' ' '\n' | grep -v "qemu" | grep -v "baby" | grep -v "libpng" | grep -v "fuzzbench")
+    backtrace_fuzzers=$(echo "$backtrace_fuzzers" | tr ' ' '\n' | grep -v "qemu" | grep -v "baby" | grep -v "libpng" | grep - v "fuzzbench")
 fi
 
 libafl=$(pwd)

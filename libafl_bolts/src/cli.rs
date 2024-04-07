@@ -34,14 +34,14 @@
 //! use std::env;
 //!
 //! // make sure to add `features = ["qemu_cli"]` to the `libafl` crate in `Cargo.toml`
-//! use libafl_qemu::Emulator;
+//! use libafl_qemu::Qemu;
 //!
 //! fn fuzz_with_qemu(mut options: FuzzerOptions) {
 //!     env::remove_var("LD_LIBRARY_PATH");
 //!
 //!     let env: Vec<(String, String)> = env::vars().collect();
 //!
-//!     let emu = Emulator::new(&mut options.qemu_args.to_vec(), &mut env).unwrap();
+//!     let qemu = Qemu::init(&mut options.qemu_args.to_vec(), &mut env).unwrap();
 //!     // do other stuff...
 //! }
 //!
@@ -231,6 +231,16 @@ pub struct FuzzerOptions {
     #[arg(long, help_heading = "Frida Options")]
     pub disable_coverage: bool,
 
+    /// Write basic block coverage to disk in `DrCov` format
+    #[cfg(feature = "frida_cli")]
+    #[arg(long, help_heading = "Frida Options")]
+    pub save_bb_coverage: bool,
+
+    /// Accumulate `DrCov` coverage for `N` executions before writing to disk
+    #[cfg(feature = "frida_cli")]
+    #[arg(long, help_heading = "Frida Options", default_value = "0")]
+    pub drcov_max_execution_cnt: usize,
+
     /// Enable `DrCov` (aarch64 only)
     #[cfg(feature = "frida_cli")]
     #[arg(long, help_heading = "Frida Options")]
@@ -365,9 +375,6 @@ pub fn parse_args() -> FuzzerOptions {
     any(feature = "cli", feature = "qemu_cli", feature = "frida_cli")
 ))]
 mod tests {
-    #[cfg(feature = "frida_cli")]
-    use alloc::string::String;
-
     use super::*;
 
     /// pass a standard option and `--` followed by some options that `FuzzerOptions` doesn't know
