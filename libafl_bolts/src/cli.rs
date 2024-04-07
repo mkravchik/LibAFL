@@ -246,11 +246,6 @@ pub struct FuzzerOptions {
     #[arg(long, help_heading = "Frida Options")]
     pub drcov: bool,
 
-    /// Accumulate `DrCov` coverage for `N` executions before writing to disk
-    #[cfg(feature = "frida_cli")]
-    #[arg(long, help_heading = "Frida Options", default_value = "0")]
-    pub drcov_max_execution_cnt: usize,
-
     /// Disable `stalker.exclude()` if `true`
     /// It's better to disable this on Windows or your harness uses c++ exception handling
     /// See <https://github.com/AFLplusplus/LibAFL/issues/830>
