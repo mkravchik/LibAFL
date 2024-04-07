@@ -25,6 +25,9 @@ pub struct DrCovRuntime {
     /// The memory ranges of this target
     ranges: RangeMap<usize, (u16, String)>,
     coverage_directory: PathBuf,
+    cnt: usize,
+    max_cnt: usize,
+    stored_cnt: usize,
 }
 
 impl FridaRuntime for DrCovRuntime {
@@ -48,6 +51,10 @@ impl FridaRuntime for DrCovRuntime {
     /// Called after execution, writes the trace to a unique `DrCov` file for this trace
     /// into `./coverage/<input_hash>_<coverage_hash>.drcov`. Empty coverages will be skipped.
     fn post_exec<I: Input + HasTargetBytes>(&mut self, input: &I) -> Result<(), Error> {
+        self.cnt += 1;
+        if self.max_cnt > 0 && self.cnt < self.max_cnt {
+            return Ok(());
+        }
         // We don't need empty coverage files
         if self.drcov_basic_blocks.is_empty() {
             return Ok(());
@@ -64,11 +71,25 @@ impl FridaRuntime for DrCovRuntime {
         }
         let coverage_hash = coverage_hasher.finish();
 
-        let filename = self
-            .coverage_directory
-            .join(format!("{input_hash:016x}_{coverage_hash:016x}.drcov"));
+        let filename = if self.max_cnt > 0 {
+            self.coverage_directory.join(format!(
+                "{input_hash:016x}_{coverage_hash:016x}_{}-{}.drcov",
+                self.stored_cnt,
+                self.stored_cnt + self.cnt
+            ))
+        } else {
+            self.coverage_directory
+                .join(format!("{input_hash:016x}_{coverage_hash:016x}.drcov"))
+        };
+
+        log::info!("Writing coverage to {}", filename.display());
         DrCovWriter::new(&self.ranges).write(filename, &self.drcov_basic_blocks)?;
         self.drcov_basic_blocks.clear();
+
+        if self.max_cnt > 0 {
+            self.stored_cnt += self.cnt;
+            self.cnt = 0;
+        }
 
         Ok(())
     }
@@ -88,6 +109,21 @@ impl DrCovRuntime {
             ..Self::default()
         }
     }
+
+    /// Create a new [`DrCovRuntime`] that accumulates coverage up to `max_cnt` and then writes it to the specified directory
+    /// This is useful for reducing the number of files written to disk
+    /// The `max_cnt` is the number of executions that will be accumulated before writing the coverage to disk
+    /// The `stored_cnt` is the number of executions that have been accumulated so far
+    /// The `cnt` is the number of executions that have been accumulated since the last write
+    /// Note that the accumulated coverage files might not be compatible with the `DrCov` format
+    /// as the same block will appear multiple times in the same file.
+    /// It is possible to use the `merge_drcov.py` tool to convert to the canonical `DrCov` format
+    pub fn with_max_cnt(max_cnt: usize) -> Self {
+        Self {
+            max_cnt,
+            ..Self::default()
+        }
+    }
 }
 
 impl Default for DrCovRuntime {
@@ -96,6 +132,9 @@ impl Default for DrCovRuntime {
             drcov_basic_blocks: vec![],
             ranges: RangeMap::new(),
             coverage_directory: PathBuf::from("./coverage"),
+            max_cnt: 0,
+            cnt: 0,
+            stored_cnt: 0,
         }
     }
 }
