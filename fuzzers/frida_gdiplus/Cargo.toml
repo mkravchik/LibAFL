@@ -27,3 +27,9 @@ dlmalloc ={version = "0.2.6", features = ["global"]}
 color-backtrace = "0.5"
 env_logger = "0.10.0"
 iced-x86 = { version = "1.20.0", features = ["code_asm"] }
+env_logger = "0.9.0"
+hashbrown = "0.14"
+rangemap = "1.3"
+log = "0.4.20"
+libc = "0.2"
+paste = "1.0"
