@@ -53,9 +53,11 @@ use libafl_frida::{
     helper::FridaInstrumentationHelper,
 };
 use libafl_targets::cmplog::CmpLogObserver;
+use crate::reachability_rt::{ReachabilityRuntime, MAP_SIZE as REACHABILITY_MAP_SIZE};
 
 /// The main fn, usually parsing parameters, and starting the fuzzer
 pub fn main() {
+    env_logger::init();
     color_backtrace::install();
 
     let options = parse_args();
@@ -347,9 +349,10 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                 let gum = Gum::obtain();
 
                 let coverage = CoverageRuntime::new();
-
+                let mut reachability = ReachabilityRuntime::new();
+                let reachability_map = reachability.map_mut_ptr();
                 let mut frida_helper =
-                    FridaInstrumentationHelper::new(&gum, options, tuple_list!(coverage));
+                    FridaInstrumentationHelper::new(&gum, options, tuple_list!(coverage, reachability));
 
                 // Create an observation channel using the coverage map
                 let edges_observer = HitcountsMapObserver::new(StdMapObserver::from_mut_ptr(
@@ -361,15 +364,23 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                 // Create an observation channel to keep track of the execution time
                 let time_observer = TimeObserver::new("time");
 
+                let reachability_observer = StdMapObserver::from_mut_ptr(
+                    "reaches",
+                    reachability_map,
+                    REACHABILITY_MAP_SIZE,
+                );
+
                 // Feedback to rate the interestingness of an input
                 // This one is composed by two Feedbacks in OR
                 let mut feedback = feedback_or!(
+                    // If I add the reachability tracker, it will appear in the statistics
                     // New maximization map feedback linked to the edges observer and the feedback state
                     MaxMapFeedback::tracking(&edges_observer, true, false),
                     // Time feedback, this one does not need a feedback state
                     TimeFeedback::with_observer(&time_observer)
                 );
 
+                //TODO - add my feedback as objective!
                 #[cfg(unix)]
                 let mut objective = feedback_or_fast!(
                     CrashFeedback::new(),
@@ -377,7 +388,13 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                     feedback_and_fast!(ConstFeedback::from(false), AsanErrorsFeedback::new())
                 );
                 #[cfg(windows)]
-                let mut objective = feedback_or_fast!(CrashFeedback::new(), TimeoutFeedback::new());
+                let mut objective = feedback_or_fast!(
+                    // New maximization map feedback linked to the reaches observer 
+                    // TODO - check whether I need to track novelties as well
+                    MaxMapFeedback::tracking(&reachability_observer, true, true),
+                    CrashFeedback::new(),
+                    TimeoutFeedback::new()
+                );
 
                 // If not restarting, create a State from scratch
                 let mut state = state.unwrap_or_else(|| {
@@ -423,7 +440,7 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                     AsanErrorsObserver::from_static_asan_errors()
                 });
                 #[cfg(windows)]
-                let observers = tuple_list!(edges_observer, time_observer,);
+                let observers = tuple_list!(edges_observer, time_observer, reachability_observer);
 
                 // Create the executor for an in-process function with just one observer for edge coverage
                 let mut executor = FridaInProcessExecutor::new(
