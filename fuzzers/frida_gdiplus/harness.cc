@@ -40,6 +40,20 @@ extern "C" __declspec(dllexport) int LLVMFuzzerTestOneInput(const uint8_t *data,
   // init = 1;
   // }
 
+  // TEMP hack to test the hooking
+  // if there data is longer than 100 
+  // if the 99th byte is less than 64 load kernel32
+  // if (size > 100){
+  //   if (data[99] < 64){
+  //     LoadLibraryW(L"kernel32.dll");
+  //   }
+  //   else if (data[99] < 128){
+  //     LoadLibraryA("setupcl.dll");
+  //   }
+  //   else {
+  //     LoadLibraryW(L"shacct.dll");
+  //   }
+  // }
   HGLOBAL m_hBuffer = ::GlobalAlloc(GMEM_MOVEABLE, size);
   if (m_hBuffer) {
     void *pBuffer = ::GlobalLock(m_hBuffer);
