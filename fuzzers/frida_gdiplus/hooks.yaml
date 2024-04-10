@@ -1,0 +1,32 @@
+# This file contains the configuration for API hooks
+# It is a list of hooks, where each entry has a module, a function, a signature (not in use yet), number of params, and a list of conditions.
+# Each condition has 
+# - a loginal operation (AND/OR), 
+# - a type (string, int, byte),
+# - a 0-based param index,
+# - ao optional offset (in case of a pointer), 
+# - a value, 
+# and a comparison operator (</>/==/!=).
+hooks: #[]
+  - module: "kernel32.dll"
+    api_name: "LoadLibraryW"
+    signature: "HMODULE LoadLibraryW(LPCWSTR lpLibFileName);"
+    num_params: 1
+    conditions:
+      - logic: "AND"
+        type: "wstring"
+        param_index: 0
+        options_offset: null
+        value: "shacct.dll"
+        operator: "=="
+  - module: "kernel32.dll"
+    api_name: "LoadLibraryExW"
+    signature: "HMODULE LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags);"
+    num_params: 3
+    conditions:
+      - logic: "AND"
+        type: "int"
+        param_index: 2
+        options_offset: null
+        value: 2 # LOAD_LIBRARY_AS_DATAFILE
+        operator: "!="

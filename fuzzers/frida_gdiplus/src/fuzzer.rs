@@ -44,7 +44,7 @@ use libafl_bolts::{
     rands::StdRand,
     shmem::{ShMemProvider, StdShMemProvider},
     tuples::{tuple_list, Merge},
-    AsSlice,
+    AsSlice, Named,
 };
 use libafl_frida::{
     asan::{
@@ -57,7 +57,12 @@ use libafl_frida::{
     helper::FridaInstrumentationHelper,
 };
 use libafl_targets::cmplog::CmpLogObserver;
-use crate::reachability_rt::{ReachabilityRuntime, MAP_SIZE as REACHABILITY_MAP_SIZE};
+use crate::reachability_rt::{
+    ReachabilityRuntime,
+    // MAP_SIZE as REACHABILITY_MAP_SIZE,
+    ReachabilityObserver,
+    ReachabilityFeedback,
+};
 
 /// The main fn, usually parsing parameters, and starting the fuzzer
 pub fn main() {
@@ -345,12 +350,18 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
             (|state: Option<_>, mut mgr: LlmpRestartingEventManager<_, _, _>, _core_id| {
                 let gum = Gum::obtain();
 
+                //In future' we will pass the name of the hooks.yaml in options
+                let hooks_conf_file = "hooks.yaml";
                 let coverage = CoverageRuntime::new();
-                let mut reachability = ReachabilityRuntime::new();
+                let mut reachability = ReachabilityRuntime::new(hooks_conf_file);
                 let reachability_map = reachability.map_mut_ptr();
+                let reachability_observer_meta = ReachabilityObserver::new(
+                    "api_reaches",
+                    reachability_map
+                );
                 let mut frida_helper =
                     FridaInstrumentationHelper::new(&gum, options, tuple_list!(coverage, reachability));
-
+    
                 // Create an observation channel using the coverage map
                 let edges_observer = HitcountsMapObserver::new(StdMapObserver::from_mut_ptr(
                     "edges",
@@ -362,12 +373,12 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                 // Create an observation channel to keep track of the execution time
                 let time_observer = TimeObserver::new("time");
 
-                let reachability_observer = StdMapObserver::from_mut_ptr(
-                    "reaches",
-                    reachability_map,
-                    REACHABILITY_MAP_SIZE,
-                );
-
+                // let reachability_observer = StdMapObserver::from_mut_ptr(
+                //     "reaches",
+                //     reachability_map,
+                //     REACHABILITY_MAP_SIZE,
+                // );
+                
                 let asan_observer = AsanErrorsObserver::from_static_asan_errors();
 
                 // Feedback to rate the interestingness of an input
@@ -392,7 +403,9 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                 let mut objective = feedback_or_fast!(
                     // New maximization map feedback linked to the reaches observer 
                     // TODO - check whether I need to track novelties as well
-                    MaxMapFeedback::tracking(&reachability_observer, true, true),
+                    // MaxMapFeedback::tracking(&reachability_observer, true, true),
+                    ReachabilityFeedback::new("api_hooks_feedback".to_string(),
+                        reachability_observer_meta.name().to_string()),
                     CrashFeedback::new(),
                     TimeoutFeedback::new()
                 );
@@ -437,7 +450,17 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                 // A fuzzer with feedbacks and a corpus scheduler
                 let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
 
-                let observers = tuple_list!(edges_observer, time_observer, asan_observer, reachability_observer);
+                #[cfg(unix)]
+                let observers = tuple_list!(edges_observer, time_observer, unsafe {
+                    AsanErrorsObserver::from_static_asan_errors()
+                });
+                #[cfg(windows)]
+                let observers = tuple_list!(
+                    edges_observer, 
+                    time_observer, 
+                    // reachability_observer,
+                    reachability_observer_meta
+                );
 
                 // Create the executor for an in-process function with just one observer for edge coverage
                 let mut executor = FridaInProcessExecutor::new(
@@ -455,6 +478,8 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
 
                 // In case the corpus is empty (on first run), reset
                 if state.must_load_initial_inputs() {
+                    // Initial inputs should not be solutions, otherwise they are not loaded...
+                    // Make sure you treat your triggers accordingly 
                     state
                         .load_initial_inputs(&mut fuzzer, &mut executor, &mut mgr, &options.input)
                         .unwrap_or_else(|_| {
