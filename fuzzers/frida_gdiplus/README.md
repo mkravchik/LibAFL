@@ -18,3 +18,6 @@ The hooks are defined in the hooks.yaml which should be found in the current dir
 3. Only Windows is supported as of now.
 
 Comments and recommendations are welcome.
+
+## minidump
+This commit adds the support for creating minidumps upon crashes. This feature can be enabled at compile time by adding the minidump feature to libafl in Cargo.toml. Please note that 1)minidumps are large (350M for frida_gdiplus) 2) Due to Frida's dynamic code generation the stack might contain many frames not belonging to any module. 
