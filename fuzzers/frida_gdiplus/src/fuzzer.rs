@@ -356,11 +356,12 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                 //In future' we will pass the name of the hooks.yaml in options
                 let hooks_conf_file = "hooks.yaml";
                 let coverage = CoverageRuntime::new();
-                let mut reachability = ReachabilityRuntime::new(hooks_conf_file);
+                let mut reachability = ReachabilityRuntime::new(Some(hooks_conf_file));
                 let reachability_map = reachability.map_mut_ptr();
                 let reachability_observer_meta = ReachabilityObserver::new(
                     "api_reaches",
-                    reachability_map
+                    reachability_map,
+                    Some(hooks_conf_file)
                 );
                 let mut frida_helper =
                     FridaInstrumentationHelper::new(&gum, options, tuple_list!(coverage, reachability));

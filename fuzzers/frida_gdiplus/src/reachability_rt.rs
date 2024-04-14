@@ -88,14 +88,22 @@ struct HookCtx{
 
 /// Parses `hooks.yaml`
 fn parse_yaml<P: AsRef<Path> + Display>(path: P) -> Result<Hooks, Error> {
-    serde_yaml::from_str(&fs::read_to_string(&path)?)
-        .map_err(|e| Error::serialize(format!("Failed to deserialize yaml at {path}: {e}")))
+    if let Ok(content) = fs::read_to_string(&path) {
+        serde_yaml::from_str(&content)
+            .map_err(|e| Error::serialize(format!("Failed to deserialize yaml at {}: {}", path, e)))
+    } else {
+        log::warn!("File {} does not exist", path);
+        Ok(Hooks { hooks: vec![] })
+    }
 }
 
 impl ReachabilityRuntime {
     /// Creates a new `ReachabilityRuntime`
-    pub fn new(hooks_file: &str) -> Self {
-        let hooks = parse_yaml(hooks_file).expect("Failed to parse hooks.yaml");
+    pub fn new(hooks_file: Option<&str>) -> Self {
+        let hooks = match hooks_file {
+            Some(file) => parse_yaml(file).expect("Failed to parse hooks.yaml"),
+            None => Hooks { hooks: vec![] }, // Empty hooks if no file provided
+        };
 
         Self {
             inner: Rc::pin(RefCell::new(ReachabilityRuntimeInner {
@@ -298,18 +306,29 @@ impl ReachabilityObserver {
     pub fn new(
         name: &str,
         map: *mut u8,
+        hooks_file: Option<&str>
     ) -> Self {
         log::info!("ReachabilityObserver created");
-        // TEMP - I need to get the hooks from the yaml, for now just hardcode them
-        let hooks_map = [
-            (0, "LoadLibraryW"),
-            (1, "LoadLibraryExW"),
-        ];
-        let hooks: HashMap<usize, String> = hooks_map.iter().map(|&(k, v)| (k, v.to_string())).collect();
+        let hooks = match hooks_file {
+            Some(file) => parse_yaml(file).expect("Failed to parse hooks.yaml"),
+            None => Hooks { hooks: vec![] }, // Empty hooks if no file provided
+        };
+        // let hooks_map = [
+        //     (0, "LoadLibraryW"),
+        //     (1, "LoadLibraryExW"),
+        // ];
+        // let hooks: HashMap<usize, String> = hooks_map.iter().map(|&(k, v)| (k, v.to_string())).collect();
+        let hooks: HashMap<usize, String> = hooks
+            .hooks
+            .iter()
+            .enumerate()
+            .map(|(idx, hook)| (idx, hook.api_name.clone()))
+            .collect();
+
         Self {
             name: name.to_string(),
             base: unsafe {StdMapObserver::from_mut_ptr(name, map, MAP_SIZE)},
-            hooks: hooks,//TODO: get the hooks from the yaml
+            hooks: hooks,
             invocations: Vec::new()
         }
     }
