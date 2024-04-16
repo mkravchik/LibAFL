@@ -60,6 +60,11 @@ use crate::reachability_rt::{
     ReachabilityFeedback,
 };
 
+use crate::crash_stack::{
+    BacktraceObserverWithStack, 
+    NewHashFeedbackWithStack,
+};
+
 /// The main fn, usually parsing parameters, and starting the fuzzer
 pub fn main() {
     env_logger::init();
@@ -399,6 +404,17 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                     TimeoutFeedback::new(),
                     feedback_and_fast!(ConstFeedback::from(false), AsanErrorsFeedback::new())
                 );
+
+                // Demonstrating crash backtrace
+                let mut bt = None;
+                #[cfg(windows)]
+                let bt_observer = BacktraceObserverWithStack::new(
+                    "BacktraceObserver",//TODO - change?
+                    &mut bt,
+                    libafl::observers::HarnessType::InProcess,
+                    true
+                );
+    
                 #[cfg(windows)]
                 let mut objective = feedback_or_fast!(
                     // New maximization map feedback linked to the reaches observer 
@@ -406,6 +422,7 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                     // MaxMapFeedback::tracking(&reachability_observer, true, true),
                     ReachabilityFeedback::new("api_hooks_feedback".to_string(),
                         reachability_observer_meta.name().to_string()),
+                    NewHashFeedbackWithStack::new(&bt_observer),
                     CrashFeedback::new(),
                     TimeoutFeedback::new()
                 );
@@ -458,7 +475,8 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                     edges_observer, 
                     time_observer, 
                     // reachability_observer,
-                    reachability_observer_meta
+                    reachability_observer_meta,
+                    bt_observer
                 );
 
                 // Create the executor for an in-process function with just one observer for edge coverage

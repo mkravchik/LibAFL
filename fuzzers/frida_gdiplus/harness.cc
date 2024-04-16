@@ -39,14 +39,19 @@ extern "C" __declspec(dllexport) int LLVMFuzzerTestOneInput(const uint8_t *data,
   // TEMP hack to test the hooking
   // if there data is longer than 100 
   // if the 99th byte is between 128 and 156, load setupcl.dll
-  if (size > 100){
-    if (data[99] > 128 && data[99] < 156){
-      LoadLibraryA("setupcl.dll");
-    }
-    else if (data[99] > 156 && data[99] < 176){
-      LoadLibraryW(L"shacct.dll");
-    }
-  }
+  // if (size > 100){
+  //   if (data[99] > 128 && data[99] < 156){
+  //     LoadLibraryA("setupcl.dll");
+  //   }
+  //   else if (data[99] > 156 && data[99] < 176){
+  //     LoadLibraryW(L"shacct.dll");
+  //   }
+  //   else if (data[99] > 176){
+  //     // crash me!
+  //     int *p = (int*)13;
+  //     *p = 0;
+  //   }
+  // }
   HGLOBAL m_hBuffer = ::GlobalAlloc(GMEM_MOVEABLE, size);
   if (m_hBuffer) {
     void *pBuffer = ::GlobalLock(m_hBuffer);
