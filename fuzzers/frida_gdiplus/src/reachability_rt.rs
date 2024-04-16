@@ -17,7 +17,7 @@ use std::{
     rc::Rc,
     fmt::Display,
     fs,
-    path::{Path, PathBuf}
+    path::{Path}
 };
 use hashbrown::HashMap;
 //use std::os::windows::ffi::OsStringExt;
@@ -39,11 +39,14 @@ pub struct Hooks {
 struct Hook {
     module: String,
     api_name: String,
+    #[allow(dead_code)]
     signature: String,
     num_params: u8,
+    #[allow(dead_code)]
     conditions: Vec<Condition>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone)]
 struct Condition {
     logic: String,
@@ -73,12 +76,12 @@ pub struct ReachabilityRuntime {
     inner: Pin<Rc<RefCell<ReachabilityRuntimeInner>>>,
 }
 
-#[derive(Debug, Clone)]
-struct FunctionToHook{
-    module: String,
-    name: String,
-    params_cnt: u8,
-}
+// #[derive(Debug, Clone)]
+// struct FunctionToHook{
+//     module: String,
+//     name: String,
+//     params_cnt: u8,
+// }
 
 struct HookCtx{
     rt: *mut ReachabilityRuntime,
