@@ -1,28 +1,37 @@
-use backtrace::Backtrace;
-use libafl::{observers::{BacktraceObserver, HarnessType, ObserverWithHashField, Observer, ObserversTuple},
-     inputs::UsesInput, executors::ExitKind, feedbacks::{NewHashFeedback, Feedback, HasObserverName}, 
-     state::{State, HasNamedMetadata, HasMetadata}, events::EventFirer, corpus::Testcase};
-use libafl_bolts::{impl_serdeany, Error, Named};
-use serde::{Deserialize, Serialize, 
-    // Serializer, 
-    de::{self, Visitor, SeqAccess, Deserializer, MapAccess}
-};
 use std::fmt;
+
+use backtrace::Backtrace;
+use libafl::{
+    corpus::Testcase,
+    events::EventFirer,
+    executors::ExitKind,
+    feedbacks::{Feedback, HasObserverName, NewHashFeedback},
+    inputs::UsesInput,
+    observers::{BacktraceObserver, HarnessType, Observer, ObserverWithHashField, ObserversTuple},
+    state::{HasMetadata, HasNamedMetadata, State},
+};
+use libafl_bolts::{impl_serdeany, Error, Named};
 use log::{info, warn};
+use serde::{
+    // Serializer,
+    de::{self, Deserializer, MapAccess, SeqAccess, Visitor},
+    Deserialize,
+    Serialize,
+};
 
 /// BacktraceMetadata
 /// If we use out-of-the-box implementations for Serialize and Deserialize,
 /// The stack is printed in decimal. Leave it if it is OK with you.
 /// The custome serialization below shows how to serialize in hex
-#[derive(Debug, 
-    // Serialize, 
+#[derive(
+    Debug,
+    // Serialize,
     // Deserialize
-)
-]
+)]
 pub struct BacktraceMetadata(Backtrace);
 impl_serdeany!(BacktraceMetadata);
 
-use serde::ser::{Serializer, SerializeStruct, SerializeSeq};
+use serde::ser::{SerializeSeq, SerializeStruct, Serializer};
 #[derive(Debug)]
 pub struct PPFrame {
     ip: usize,
@@ -39,9 +48,10 @@ impl Serialize for PPFrame {
         let mut state = serializer.serialize_struct("PPFrame", 4)?;
         state.serialize_field("ip", &format!("{:#x}", self.ip))?;
         state.serialize_field("symbol_address", &format!("{:#x}", self.symbol_address))?;
-        let base_address = self.module_base_address
-                    .map(|addr| format!("{:#x}", addr))
-                    .unwrap_or_else(|| "unknown".to_string());
+        let base_address = self
+            .module_base_address
+            .map(|addr| format!("{:#x}", addr))
+            .unwrap_or_else(|| "unknown".to_string());
         state.serialize_field("module_base_address", &base_address)?;
         state.serialize_field("symbols", &self.symbols)?;
         state.end()
@@ -53,7 +63,11 @@ impl<'de> Deserialize<'de> for PPFrame {
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_struct("PPFrame", &["ip", "symbol_address", "module_base_address", "symbols"], PPFrameVisitor)
+        deserializer.deserialize_struct(
+            "PPFrame",
+            &["ip", "symbol_address", "module_base_address", "symbols"],
+            PPFrameVisitor,
+        )
     }
 }
 
@@ -78,34 +92,47 @@ impl<'de> Visitor<'de> for PPFrameVisitor {
             match key {
                 "ip" => {
                     let ip_str: String = map.next_value()?;
-                    ip = Some(usize::from_str_radix(&ip_str.trim_start_matches("0x"), 16).map_err(de::Error::custom)?);
-                },
+                    ip = Some(
+                        usize::from_str_radix(&ip_str.trim_start_matches("0x"), 16)
+                            .map_err(de::Error::custom)?,
+                    );
+                }
                 "symbol_address" => {
                     let symbol_address_str: String = map.next_value()?;
-                    symbol_address = Some(usize::from_str_radix(&symbol_address_str.trim_start_matches("0x"), 16).map_err(de::Error::custom)?);
-                },
+                    symbol_address = Some(
+                        usize::from_str_radix(&symbol_address_str.trim_start_matches("0x"), 16)
+                            .map_err(de::Error::custom)?,
+                    );
+                }
                 "module_base_address" => {
                     let module_base_address_str: String = map.next_value()?;
                     if module_base_address_str != "unknown" {
-                        module_base_address = Some(usize::from_str_radix(&module_base_address_str.trim_start_matches("0x"), 16).map_err(de::Error::custom)?);
+                        module_base_address = Some(
+                            usize::from_str_radix(
+                                &module_base_address_str.trim_start_matches("0x"),
+                                16,
+                            )
+                            .map_err(de::Error::custom)?,
+                        );
                     }
-                },
+                }
                 "symbols" => {
                     symbols = map.next_value()?;
-                },
+                }
                 _ => (),
             }
         }
 
         let ip = ip.ok_or_else(|| de::Error::missing_field("ip"))?;
-        let symbol_address = symbol_address.ok_or_else(|| de::Error::missing_field("symbol_address"))?;
+        let symbol_address =
+            symbol_address.ok_or_else(|| de::Error::missing_field("symbol_address"))?;
         let symbols = symbols.ok_or_else(|| de::Error::missing_field("symbols"))?;
 
         Ok(PPFrame {
             ip,
             symbol_address,
             module_base_address,
-            symbols
+            symbols,
         })
     }
 
@@ -114,22 +141,29 @@ impl<'de> Visitor<'de> for PPFrameVisitor {
     where
         V: SeqAccess<'de>,
     {
-        let ip_str = seq.next_element::<String>()?
+        let ip_str = seq
+            .next_element::<String>()?
             .ok_or_else(|| de::Error::invalid_length(0, &self))?;
-        let ip = usize::from_str_radix(&ip_str.trim_start_matches("0x"), 16).map_err(de::Error::custom)?;
-        
-        let symbol_address_str = seq.next_element::<String>()?
+        let ip = usize::from_str_radix(&ip_str.trim_start_matches("0x"), 16)
+            .map_err(de::Error::custom)?;
+
+        let symbol_address_str = seq
+            .next_element::<String>()?
             .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-        let symbol_address = usize::from_str_radix(&symbol_address_str.trim_start_matches("0x"), 16).map_err(de::Error::custom)?;
-        
+        let symbol_address =
+            usize::from_str_radix(&symbol_address_str.trim_start_matches("0x"), 16)
+                .map_err(de::Error::custom)?;
+
         let module_base_address_str = seq.next_element::<String>()?;
         let module_base_address_str = match module_base_address_str {
             Some(s) if s != "unknown" => Some(
-                usize::from_str_radix(&s.trim_start_matches("0x"), 16).map_err(de::Error::custom)?
+                usize::from_str_radix(&s.trim_start_matches("0x"), 16)
+                    .map_err(de::Error::custom)?,
             ),
             _ => None,
         };
-        let symbols = seq.next_element::<String>()?
+        let symbols = seq
+            .next_element::<String>()?
             .ok_or_else(|| de::Error::invalid_length(1, &self))?;
 
         Ok(PPFrame {
@@ -138,7 +172,7 @@ impl<'de> Visitor<'de> for PPFrameVisitor {
             module_base_address: module_base_address_str,
             symbols: symbols,
         })
-    }    
+    }
 }
 
 impl Serialize for BacktraceMetadata {
@@ -165,10 +199,11 @@ impl Serialize for BacktraceMetadata {
                 ip: frame.ip() as usize,
                 symbol_address: frame.symbol_address() as usize,
                 module_base_address: frame.module_base_address().map(|addr| addr as usize),
-                symbols: frame.symbols()
-                .get(0)
-                .map(|symbol| format!("{:?}", symbol))
-                .unwrap_or_else(|| "No symbol".to_string())
+                symbols: frame
+                    .symbols()
+                    .get(0)
+                    .map(|symbol| format!("{:?}", symbol))
+                    .unwrap_or_else(|| "No symbol".to_string()),
             };
             seq.serialize_element(&pp_frame)?;
         }
@@ -176,7 +211,7 @@ impl Serialize for BacktraceMetadata {
     }
 }
 
-// // The implementation below is not correct, as it does not actually parses 
+// // The implementation below is not correct, as it does not actually parses
 // // The string and creates frames out of it.
 // // Alas, I was not able to do it. The way BacktraceFrame is implemented,
 // // it is not possible to create a frame outside of the crate
@@ -196,11 +231,9 @@ impl<'de> Visitor<'de> for BacktraceMetadataVisitor {
         A: SeqAccess<'de>,
     {
         // Read all elements from the sequence
-        // while let Some(_) = seq.next_element::<HashMap<String, Self::Value>>()? {} 
+        // while let Some(_) = seq.next_element::<HashMap<String, Self::Value>>()? {}
 
-        while let Some(_) = seq.next_element::<PPFrame>().map_err(|err| {
-            err
-        })? {}
+        while let Some(_) = seq.next_element::<PPFrame>().map_err(|err| err)? {}
         // Always return a current BacktraceMetadata.
         Ok(BacktraceMetadata(Backtrace::new_unresolved()))
     }
@@ -210,14 +243,13 @@ impl<'de> Deserialize<'de> for BacktraceMetadata {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
-    {  
+    {
         deserializer.deserialize_seq(BacktraceMetadataVisitor)
         // Ignore the deserialized value and return an empty BacktraceMetadata
         // let _ = Deserialize::deserialize(deserializer)?;
-        // Ok(BacktraceMetadata(Backtrace::new_unresolved()))       
+        // Ok(BacktraceMetadata(Backtrace::new_unresolved()))
     }
 }
-
 
 /// My custom backtrace observer wrapping BacktraceObserver
 /// Keeps the backtrace and returns it to the Feedback
@@ -227,7 +259,7 @@ impl<'de> Deserialize<'de> for BacktraceMetadata {
 #[allow(clippy::unsafe_derive_deserialize)]
 #[derive(Serialize, Deserialize, Debug)]
 pub struct BacktraceObserverWithStack<'a> {
-    inner: BacktraceObserver<'a> ,
+    inner: BacktraceObserver<'a>,
     harness_type: HarnessType,
     b: Option<Backtrace>,
     with_symbols: bool,
@@ -240,14 +272,17 @@ impl<'a> BacktraceObserverWithStack<'a> {
         observer_name: &str,
         backtrace_hash: &'a mut Option<u64>,
         harness_type: HarnessType,
-        with_symbols: bool
+        with_symbols: bool,
     ) -> Self {
         Self {
-            inner: BacktraceObserver::new(observer_name, 
-                libafl_bolts::ownedref::OwnedRefMut::Ref(backtrace_hash), harness_type.clone()),
+            inner: BacktraceObserver::new(
+                observer_name,
+                libafl_bolts::ownedref::OwnedRefMut::Ref(backtrace_hash),
+                harness_type.clone(),
+            ),
             harness_type,
             b: None,
-            with_symbols
+            with_symbols,
         }
     }
 
@@ -280,12 +315,10 @@ where
         // Rest of your code...
         if self.harness_type == HarnessType::InProcess {
             if *exit_kind == ExitKind::Crash {
-                self.b = Some(
-                    match self.with_symbols {
-                        false => Backtrace::new_unresolved(),
-                        true => Backtrace::new()
-                    }
-                );
+                self.b = Some(match self.with_symbols {
+                    false => Backtrace::new_unresolved(),
+                    true => Backtrace::new(),
+                });
             } else {
                 self.b = None;
             }
@@ -318,16 +351,16 @@ impl<'a> Named for BacktraceObserverWithStack<'a> {
     }
 }
 
-/// 
+///
 /// My custom feedback wrapping NewHashFeedback
 /// I did not find any more elegant way of implementing this
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct NewHashFeedbackWithStack<O, S> (NewHashFeedback<O, S>);
+pub struct NewHashFeedbackWithStack<O, S>(NewHashFeedback<O, S>);
 
 impl<O, S> Feedback<S> for NewHashFeedbackWithStack<O, S>
 where
     O: ObserverWithHashField + Named + std::fmt::Debug,
-    S:  State + HasNamedMetadata + std::fmt::Debug,
+    S: State + HasNamedMetadata + std::fmt::Debug,
 {
     fn init_state(&mut self, state: &mut S) -> Result<(), Error> {
         self.0.init_state(state)
@@ -347,7 +380,8 @@ where
         OT: ObserversTuple<S>,
     {
         //Delegate to the self.0
-        self.0.is_interesting(state, _manager, _input, observers, _exit_kind)
+        self.0
+            .is_interesting(state, _manager, _input, observers, _exit_kind)
     }
 
     /// Append to the testcase the generated metadata in case of a new corpus item
@@ -364,24 +398,23 @@ where
         OT: ObserversTuple<S>,
         EM: EventFirer<State = S>,
     {
-        info!( "{}: append_metadata called!", 
-            std::process::id().to_string());
+        info!(
+            "{}: append_metadata called!",
+            std::process::id().to_string()
+        );
         let observer = observers
             .match_name::<BacktraceObserverWithStack>(&self.0.observer_name())
             .expect("A NewHashFeedbackWithStack needs a BacktraceObserverWithStack");
 
-        match observer.get_backtrace(){
+        match observer.get_backtrace() {
             // Performance problem here!
-            Some(b)=>testcase.add_metadata(BacktraceMetadata(b.clone())),
-            None=>warn!{"{}: append_metadata did not find backtrace!", 
-                std::process::id().to_string()},
+            Some(b) => testcase.add_metadata(BacktraceMetadata(b.clone())),
+            None => warn! {"{}: append_metadata did not find backtrace!",
+            std::process::id().to_string()},
         }
-        
-
 
         Ok(())
     }
-    
 }
 
 impl<O, S> Named for NewHashFeedbackWithStack<O, S> {
@@ -412,7 +445,6 @@ where
 #[cfg(test)]
 #[test]
 fn test_backtrace_metadata_serialization() {
-
     for backtrace in [Backtrace::new_unresolved(), Backtrace::new()].iter() {
         let backtrace_metadata = BacktraceMetadata(backtrace.clone());
         let serialized = serde_json::to_string(&backtrace_metadata).unwrap();
@@ -431,4 +463,3 @@ fn test_backtrace_metadata_serialization() {
         assert!(deserialized.0.frames().len() > 0);
     }
 }
-

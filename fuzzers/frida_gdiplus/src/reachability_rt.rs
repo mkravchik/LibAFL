@@ -1,34 +1,30 @@
-use libafl::corpus::Testcase;
-use libafl::events::EventFirer;
-use libafl::feedbacks::{Feedback, HasObserverName};
-use libafl::observers::{MapObserver, Observer, ObserversTuple, StdMapObserver};
-use libafl::state::{HasMetadata, HasNamedMetadata, State};
-use libafl_frida::helper::FridaRuntime;
-use frida_gum::{Gum, interceptor::Interceptor, ModuleMap, NativePointer};
-use rangemap::RangeMap;
-use std::os::raw::c_void;
-use libafl::inputs::{Input, HasTargetBytes};
-use libafl::Error;
-
 use std::{
-    cell::RefCell,
-    marker::PhantomPinned,
-    pin::Pin,
+    cell::RefCell, fmt::Display, fs, marker::PhantomPinned, os::raw::c_void, path::Path, pin::Pin,
     rc::Rc,
-    fmt::Display,
-    fs,
-    path::{Path}
 };
+
+use frida_gum::{interceptor::Interceptor, Gum, ModuleMap, NativePointer};
 use hashbrown::HashMap;
-//use std::os::windows::ffi::OsStringExt;
-use serde::{Serialize, Deserialize};
 use libafl::{
-    executors::ExitKind,    
+    corpus::Testcase,
+    events::EventFirer,
+    feedbacks::{Feedback, HasObserverName},
+    inputs::{HasTargetBytes, Input},
+    observers::{MapObserver, Observer, ObserversTuple, StdMapObserver},
+    state::{HasMetadata, HasNamedMetadata, State},
+    Error,
+};
+use libafl::{
+    executors::ExitKind,
     inputs::UsesInput,
     // state::HasMetadata,
     // Error,
 };
 use libafl_bolts::{HasLen, Named};
+use libafl_frida::helper::FridaRuntime;
+use rangemap::RangeMap;
+//use std::os::windows::ffi::OsStringExt;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
 pub struct Hooks {
@@ -67,7 +63,7 @@ struct ReachabilityRuntimeInner {
     hooks_cnt: u32,
     hook_indices: HashMap<String, u32>,
     _pinned: PhantomPinned,
-    hooks: Hooks
+    hooks: Hooks,
 }
 
 #[derive(Debug, Clone)]
@@ -83,10 +79,10 @@ pub struct ReachabilityRuntime {
 //     params_cnt: u8,
 // }
 
-struct HookCtx{
+struct HookCtx {
     rt: *mut ReachabilityRuntime,
     org_fn: NativePointer,
-    hook_idx: u32,    
+    hook_idx: u32,
 }
 
 /// Parses `hooks.yaml`
@@ -114,7 +110,7 @@ impl ReachabilityRuntime {
                 hooks_cnt: 0,
                 hook_indices: HashMap::new(),
                 _pinned: PhantomPinned,
-                hooks: hooks
+                hooks: hooks,
             })),
         }
     }
@@ -123,7 +119,7 @@ impl ReachabilityRuntime {
     pub fn map_mut_ptr(&mut self) -> *mut u8 {
         self.inner.borrow_mut().map.as_mut_ptr()
     }
-    
+
     unsafe fn replacement_prolog() -> *mut c_void {
         // Set the execution in the map
         let mut invocation = Interceptor::current_invocation();
@@ -138,7 +134,6 @@ impl ReachabilityRuntime {
     }
 
     unsafe fn replacement_one(param1: *mut c_void) -> *mut c_void {
-
         // // Log the passed parameter as a wide char string
         // let len = (0..).take_while(|&i| *(param1 as *const u16).offset(i) != 0).count();
         // let param1_str = std::ffi::OsString::from_wide(std::slice::from_raw_parts(param1 as *const u16, len))
@@ -154,47 +149,80 @@ impl ReachabilityRuntime {
 
     unsafe fn replacement_two(param1: *mut c_void, param2: *mut c_void) -> *mut c_void {
         let org_fn = Self::replacement_prolog();
-        let org_fn: unsafe fn(*mut c_void, *mut c_void) -> *mut c_void = std::mem::transmute(org_fn);
+        let org_fn: unsafe fn(*mut c_void, *mut c_void) -> *mut c_void =
+            std::mem::transmute(org_fn);
         org_fn(param1, param2)
     }
 
-    unsafe fn replacement_three(param1: *mut c_void, param2: *mut c_void, param3: *mut c_void) -> *mut c_void {
+    unsafe fn replacement_three(
+        param1: *mut c_void,
+        param2: *mut c_void,
+        param3: *mut c_void,
+    ) -> *mut c_void {
         let org_fn = Self::replacement_prolog();
-        let org_fn: unsafe fn(*mut c_void, *mut c_void, *mut c_void) -> *mut c_void = std::mem::transmute(org_fn);
+        let org_fn: unsafe fn(*mut c_void, *mut c_void, *mut c_void) -> *mut c_void =
+            std::mem::transmute(org_fn);
         org_fn(param1, param2, param3)
     }
 
-    
-    fn hook_with_replacement(&mut self, interceptor: &mut Interceptor, lib: &str, name: &str, replacement: *mut c_void) {
+    fn hook_with_replacement(
+        &mut self,
+        interceptor: &mut Interceptor,
+        lib: &str,
+        name: &str,
+        replacement: *mut c_void,
+    ) {
         log::trace!("Hooking {}", name);
         let hook_idx = self.inner.borrow().hooks_cnt;
-        self.inner.borrow_mut().hook_indices.insert(name.to_string(), hook_idx);
+        self.inner
+            .borrow_mut()
+            .hook_indices
+            .insert(name.to_string(), hook_idx);
         let hook_ctx = HookCtx {
             rt: self,
-            org_fn: frida_gum::Module::find_export_by_name(Some(&lib), &name).expect("Failed to find function"),
+            org_fn: frida_gum::Module::find_export_by_name(Some(&lib), &name)
+                .expect("Failed to find function"),
             hook_idx: hook_idx,
         };
         let hook_ctx_ptr = Box::into_raw(Box::new(hook_ctx));
-    
-        interceptor.replace(
-            frida_gum::Module::find_export_by_name(Some(&lib), &name).expect("Failed to find function"),
-            NativePointer(replacement as *mut c_void),
-            NativePointer(hook_ctx_ptr as *mut c_void)
-        ).ok();
-    
+
+        interceptor
+            .replace(
+                frida_gum::Module::find_export_by_name(Some(&lib), &name)
+                    .expect("Failed to find function"),
+                NativePointer(replacement as *mut c_void),
+                NativePointer(hook_ctx_ptr as *mut c_void),
+            )
+            .ok();
+
         self.inner.borrow_mut().hooks_cnt += 1;
         log::trace!("Hooked {}", name);
     }
-    
+
     fn hook_function(&mut self, gum: &Gum, fn2hook: Hook) {
         let mut interceptor = Interceptor::obtain(gum);
         let lib = fn2hook.module;
         let name = fn2hook.api_name;
-        let params_cnt = fn2hook.num_params;        
+        let params_cnt = fn2hook.num_params;
         match params_cnt {
-            1 => self.hook_with_replacement(&mut interceptor, &lib, &name, Self::replacement_one as *mut c_void),
-            2 => self.hook_with_replacement(&mut interceptor, &lib, &name, Self::replacement_two as *mut c_void),
-            3 => self.hook_with_replacement(&mut interceptor, &lib, &name, Self::replacement_three as *mut c_void),
+            1 => self.hook_with_replacement(
+                &mut interceptor,
+                &lib,
+                &name,
+                Self::replacement_one as *mut c_void,
+            ),
+            2 => self.hook_with_replacement(
+                &mut interceptor,
+                &lib,
+                &name,
+                Self::replacement_two as *mut c_void,
+            ),
+            3 => self.hook_with_replacement(
+                &mut interceptor,
+                &lib,
+                &name,
+                Self::replacement_three as *mut c_void,
+            ),
             _ => {
                 log::error!("Unsupported number of parameters for function {}", name);
                 return;
@@ -239,7 +267,7 @@ impl ReachabilityRuntime {
             let hooks = self.inner.borrow().hooks.hooks.clone();
             for hook in hooks {
                 self.hook_function(gum, hook);
-            }            
+            }
             // let functions_to_hook = vec![
             //     FunctionToHook {
             //         module: "kernel32.dll".to_string(),
@@ -251,7 +279,7 @@ impl ReachabilityRuntime {
             //         name: "LoadLibraryExW".to_string(),
             //         params_cnt: 3,
             //     },
-            // ];    
+            // ];
             // for to_hook in functions_to_hook {
             //     self.hook_function(gum, to_hook);
             // }
@@ -263,7 +291,7 @@ impl ReachabilityRuntime {
     }
 }
 
-impl FridaRuntime for ReachabilityRuntime {    
+impl FridaRuntime for ReachabilityRuntime {
     /// initializes this runtime with the list of places to hook
     fn init(
         &mut self,
@@ -283,16 +311,15 @@ impl FridaRuntime for ReachabilityRuntime {
     /// Called after execution, does nothing
     fn post_exec<I: Input + HasTargetBytes>(&mut self, _input: &I) -> Result<(), Error> {
         Ok(())
-    }   
+    }
 }
 
 // Custom feedback to keep the metadata in the test case
 // In order to do that I'll need:
 // 1. Feedback checks with observers what's new therefore I need a new observer
-// 2. This new observer needs to be familiar with the Runtime and get out of 
+// 2. This new observer needs to be familiar with the Runtime and get out of
 // the APIs called during the execution on post_exec. Maybe I should add this to the state...
 // 3. So the Runtime should keep the invocation information, the map is good for the API only
-
 
 /// The reachability observer
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -300,17 +327,13 @@ pub struct ReachabilityObserver {
     name: String,
     base: StdMapObserver<'static, u8, false>,
     hooks: HashMap<usize, String>, // idx -> name
-    invocations: Vec<String>
+    invocations: Vec<String>,
 }
 
 impl ReachabilityObserver {
     /// Creates a new [`ReachabilityObserver`] with the given name.
     #[must_use]
-    pub fn new(
-        name: &str,
-        map: *mut u8,
-        hooks_file: Option<&str>
-    ) -> Self {
+    pub fn new(name: &str, map: *mut u8, hooks_file: Option<&str>) -> Self {
         log::info!("ReachabilityObserver created");
         let hooks = match hooks_file {
             Some(file) => parse_yaml(file).expect("Failed to parse hooks.yaml"),
@@ -330,12 +353,11 @@ impl ReachabilityObserver {
 
         Self {
             name: name.to_string(),
-            base: unsafe {StdMapObserver::from_mut_ptr(name, map, MAP_SIZE)},
+            base: unsafe { StdMapObserver::from_mut_ptr(name, map, MAP_SIZE) },
             hooks: hooks,
-            invocations: Vec::new()
+            invocations: Vec::new(),
         }
     }
-
 
     #[must_use]
     pub fn get_invocations(&self) -> &Vec<String> {
@@ -361,7 +383,6 @@ where
         input: &S::Input,
         exit_kind: &ExitKind,
     ) -> Result<(), Error> {
-
         // iterate over the base items and for all set items
         // keep the names of the hooks in the invocations
         let len = self.base.len();
@@ -410,7 +431,7 @@ libafl_bolts::impl_serdeany!(ReachabilityMetadata);
 /// ReachabilityFeedback
 /// This feedback is used to keep the metadata in the test case
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ReachabilityFeedback{
+pub struct ReachabilityFeedback {
     /// Name identifier of this instance
     name: String,
     /// Name identifier of the observer
@@ -454,13 +475,13 @@ where
     fn append_metadata<EM, OT>(
         &mut self,
         _state: &mut S,
-        _manager: &mut EM,        
+        _manager: &mut EM,
         observers: &OT,
         testcase: &mut Testcase<S::Input>,
     ) -> Result<(), Error>
     where
         OT: ObserversTuple<S>,
-        EM: EventFirer<State = S>,        
+        EM: EventFirer<State = S>,
     {
         log::info!(
             "{}: append_metadata called!",
