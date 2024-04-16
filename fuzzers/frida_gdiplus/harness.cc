@@ -37,7 +37,7 @@ extern "C" __declspec(dllexport) int LLVMFuzzerTestOneInput(const uint8_t *data,
   }
 
   // TEMP hack to test the hooking
-  // if there data is longer than 100 
+  // if there data is longer than 100
   // if the 99th byte is between 128 and 156, load setupcl.dll
   // if (size > 100){
   //   if (data[99] > 128 && data[99] < 156){

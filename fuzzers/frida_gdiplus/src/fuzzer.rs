@@ -53,16 +53,13 @@ use libafl_frida::{
     helper::FridaInstrumentationHelper,
 };
 use libafl_targets::cmplog::CmpLogObserver;
+
+use crate::crash_stack::{BacktraceObserverWithStack, NewHashFeedbackWithStack};
 use crate::reachability_rt::{
-    ReachabilityRuntime,
+    ReachabilityFeedback,
     // MAP_SIZE as REACHABILITY_MAP_SIZE,
     ReachabilityObserver,
-    ReachabilityFeedback,
-};
-
-use crate::crash_stack::{
-    BacktraceObserverWithStack, 
-    NewHashFeedbackWithStack,
+    ReachabilityRuntime,
 };
 
 /// The main fn, usually parsing parameters, and starting the fuzzer
@@ -366,11 +363,14 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                 let reachability_observer_meta = ReachabilityObserver::new(
                     "api_reaches",
                     reachability_map,
-                    Some(hooks_conf_file)
+                    Some(hooks_conf_file),
                 );
-                let mut frida_helper =
-                    FridaInstrumentationHelper::new(&gum, options, tuple_list!(coverage, reachability));
-    
+                let mut frida_helper = FridaInstrumentationHelper::new(
+                    &gum,
+                    options,
+                    tuple_list!(coverage, reachability),
+                );
+
                 // Create an observation channel using the coverage map
                 let edges_observer = HitcountsMapObserver::new(StdMapObserver::from_mut_ptr(
                     "edges",
@@ -386,7 +386,7 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                 //     reachability_map,
                 //     REACHABILITY_MAP_SIZE,
                 // );
-                
+
                 // Feedback to rate the interestingness of an input
                 // This one is composed by two Feedbacks in OR
                 let mut feedback = feedback_or!(
@@ -409,19 +409,21 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                 let mut bt = None;
                 #[cfg(windows)]
                 let bt_observer = BacktraceObserverWithStack::new(
-                    "BacktraceObserver",//TODO - change?
+                    "BacktraceObserver", //TODO - change?
                     &mut bt,
                     libafl::observers::HarnessType::InProcess,
-                    true
+                    true,
                 );
-    
+
                 #[cfg(windows)]
                 let mut objective = feedback_or_fast!(
-                    // New maximization map feedback linked to the reaches observer 
+                    // New maximization map feedback linked to the reaches observer
                     // TODO - check whether I need to track novelties as well
                     // MaxMapFeedback::tracking(&reachability_observer, true, true),
-                    ReachabilityFeedback::new("api_hooks_feedback".to_string(),
-                        reachability_observer_meta.name().to_string()),
+                    ReachabilityFeedback::new(
+                        "api_hooks_feedback".to_string(),
+                        reachability_observer_meta.name().to_string()
+                    ),
                     NewHashFeedbackWithStack::new(&bt_observer),
                     CrashFeedback::new(),
                     TimeoutFeedback::new()
@@ -472,8 +474,8 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                 });
                 #[cfg(windows)]
                 let observers = tuple_list!(
-                    edges_observer, 
-                    time_observer, 
+                    edges_observer,
+                    time_observer,
                     // reachability_observer,
                     reachability_observer_meta,
                     bt_observer
@@ -495,7 +497,7 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                 // In case the corpus is empty (on first run), reset
                 if state.must_load_initial_inputs() {
                     // Initial inputs should not be solutions, otherwise they are not loaded...
-                    // Make sure you treat your triggers accordingly 
+                    // Make sure you treat your triggers accordingly
                     state
                         .load_initial_inputs(&mut fuzzer, &mut executor, &mut mgr, &options.input)
                         .unwrap_or_else(|_| {

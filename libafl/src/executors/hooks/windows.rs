@@ -133,7 +133,7 @@ pub mod windows_exception_handler {
         inputs::UsesInput,
         state::{HasCorpus, HasExecutions, HasSolutions, State},
     };
-   
+
     pub(crate) type HandlerFuncPtr =
         unsafe fn(*mut EXCEPTION_POINTERS, *mut InProcessExecutorHandlerData);
 
@@ -342,29 +342,41 @@ pub mod windows_exception_handler {
 
             let exception_list = data.exceptions();
             if exception_list.contains(&code) {
-                log::error!("Crashed with {code} at {:?}", 
-                    exception_pointers.ExceptionRecord.as_mut().unwrap().ExceptionAddress);
-                // Minidump support (if desired). 
+                log::error!(
+                    "Crashed with {code} at {:?}",
+                    exception_pointers
+                        .ExceptionRecord
+                        .as_mut()
+                        .unwrap()
+                        .ExceptionAddress
+                );
+                // Minidump support (if desired).
                 // Notice that with Frida, the usefullness of the stack mught be very limited.
                 // as we'll mostly see the transformed blocks and not the original code.
                 #[cfg(feature = "minidump")]
                 {
-                    use winapi::shared::minwindef::{DWORD, BOOL, FALSE};
-                    use winapi::um::processthreadsapi::{GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId};
-                    use std::ptr::null_mut;
-                    use std::fs::File;
-                    use std::os::windows::io::AsRawHandle;
-                    use std::os::windows::raw::HANDLE;
+                    use std::{
+                        fs::File,
+                        os::windows::{io::AsRawHandle, raw::HANDLE},
+                        ptr::null_mut,
+                    };
+
+                    use winapi::{
+                        shared::minwindef::{BOOL, DWORD, FALSE},
+                        um::processthreadsapi::{
+                            GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId,
+                        },
+                    };
 
                     const MINI_DUMP_FULL_MEMORY_INFO: i32 = 0x00000800;
                     const MINI_DUMP_WITH_FULL_MEMORY: i32 = 0x2;
                     const MINI_DUMP_WITH_HANDLE_DATA: i32 = 0x4;
                     const MINI_DUMP_WITH_THREAD_INFO: i32 = 0x1000;
-                    
-                    let dump_type = MINI_DUMP_WITH_FULL_MEMORY | 
-                        MINI_DUMP_WITH_HANDLE_DATA | 
-                        MINI_DUMP_WITH_THREAD_INFO |
-                        MINI_DUMP_FULL_MEMORY_INFO;                    
+
+                    let dump_type = MINI_DUMP_WITH_FULL_MEMORY
+                        | MINI_DUMP_WITH_HANDLE_DATA
+                        | MINI_DUMP_WITH_THREAD_INFO
+                        | MINI_DUMP_FULL_MEMORY_INFO;
 
                     // Note that the struct MUST be packed! The ExceptionPointers should be
                     // at the offset of 4 bytes from the start of the struct.
@@ -386,23 +398,26 @@ pub mod windows_exception_handler {
                             UserStreamParam: *mut c_void,
                             CallbackParam: *mut c_void,
                         ) -> BOOL;
-                    }                    
+                    }
 
                     let file = File::create(format!("{}_crash_dump.dmp", std::process::id()))
                         .expect("Failed to create dump file");
                     let file_handle = file.as_raw_handle();
-                
+
                     unsafe {
-                        log::info!("Creating minidump from pointers {:?} in process {}!", 
-                            original_exception_pointers, std::process::id() );
-                        
+                        log::info!(
+                            "Creating minidump from pointers {:?} in process {}!",
+                            original_exception_pointers,
+                            std::process::id()
+                        );
+
                         #[allow(non_snake_case)]
                         let mut exception_info = MINIDUMP_EXCEPTION_INFORMATION {
                             ThreadId: GetCurrentThreadId(),
                             ExceptionPointers: original_exception_pointers,
                             ClientPointers: FALSE,
                         };
-                    
+
                         let res = MiniDumpWriteDump(
                             GetCurrentProcess(),
                             GetCurrentProcessId(),
@@ -413,13 +428,13 @@ pub mod windows_exception_handler {
                             null_mut(),
                         );
                         if res == FALSE {
-                            log::error!("Failed to create minidump (error {})!",
-                            winapi::um::errhandlingapi::GetLastError());
-                        } 
+                            log::error!(
+                                "Failed to create minidump (error {})!",
+                                winapi::um::errhandlingapi::GetLastError()
+                            );
+                        }
                     }
-                
                 }
-
             } else {
                 // log::trace!("Exception code received, but {code} is not in CRASH_EXCEPTIONS");
                 is_crash = false;
