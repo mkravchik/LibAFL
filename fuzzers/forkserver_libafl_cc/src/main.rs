@@ -5,7 +5,7 @@ use clap::Parser;
 use libafl::{
     corpus::{Corpus, InMemoryCorpus, OnDiskCorpus},
     events::SimpleEventManager,
-    executors::{forkserver::ForkserverExecutor, HasObservers},
+    executors::forkserver::ForkserverExecutor,
     feedback_and_fast, feedback_or,
     feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
@@ -26,6 +26,7 @@ use libafl_bolts::{
 };
 use libafl_targets::EDGES_MAP_SIZE_IN_USE;
 use nix::sys::signal::Signal;
+use libafl_targets::{EDGES_MAP_SIZE, EDGES_MAP_PTR};
 
 /// The commandline args this fuzzer accepts
 #[derive(Debug, Parser)]
@@ -101,7 +102,7 @@ pub fn main() {
     shmem.write_to_env("__AFL_SHM_ID").unwrap();
     let shmem_buf = shmem.as_slice_mut();
     // the next line is not needed
-    // unsafe { EDGES_MAP_PTR = shmem_buf.as_mut_ptr() };
+    unsafe { EDGES_MAP_PTR = shmem_buf.as_mut_ptr() };
 
     // Create an observation channel using the signals map
     let edges_observer = unsafe {
