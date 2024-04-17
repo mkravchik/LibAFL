@@ -16,7 +16,7 @@ use libafl::{
 use libafl_bolts::{AsMutSlice, HasLen, Named};
 use libafl_targets::{
     drcov::{DrCovBasicBlock, DrCovWriterWithCounter},
-    sancov_cmp::sanitizer_cov_pc_table,
+    sancov_pcguard::sanitizer_cov_pc_table,
 };
 use rangemap::RangeMap;
 use serde::{Deserialize, Serialize};
@@ -163,6 +163,24 @@ where
     #[inline]
     fn len(&self) -> usize {
         self.base.len()
+    }
+}
+
+impl<M> AsMut<Self> for AccMapObserver<M>
+where
+    M: MapObserver,
+{
+    fn as_mut(&mut self) -> &mut Self {
+        self
+    }
+}
+
+impl<M> AsRef<Self> for AccMapObserver<M>
+where
+M: MapObserver,
+{
+    fn as_ref(&self) -> &Self {
+        self
     }
 }
 
