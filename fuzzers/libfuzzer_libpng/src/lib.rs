@@ -95,6 +95,7 @@ fn fuzz(corpus_dirs: &[PathBuf], objective_dir: PathBuf, broker_port: u16) -> Re
     };
 
     let options = FuzzerOptions::try_parse();
+    log::info!("Options: {:?}", options );
     let save_bb_coverage = options
         .as_ref()
         .map(|opts| opts.save_bb_coverage)
