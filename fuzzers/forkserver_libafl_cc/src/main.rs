@@ -12,7 +12,7 @@ use libafl::{
     inputs::BytesInput,
     monitors::SimpleMonitor,
     mutators::{scheduled::havoc_mutations, tokens_mutations, StdScheduledMutator, Tokens},
-    observers::{CanTrack, HitcountsMapObserver, StdMapObserver, TimeObserver},
+    observers::{CanTrack, ExplicitTracking, HitcountsMapObserver, StdMapObserver, TimeObserver},
     schedulers::{IndexesLenTimeMinimizerScheduler, QueueScheduler},
     stages::mutational::StdMutationalStage,
     state::{HasCorpus, StdState},
@@ -25,6 +25,7 @@ use libafl_bolts::{
     tuples::{tuple_list, Merge},
     AsMutSlice,
 };
+use libafl_targets::{EDGES_MAP_PTR, EDGES_MAP_SIZE};
 use nix::sys::signal::Signal;
 use libafl_targets::{EDGES_MAP_SIZE, EDGES_MAP_PTR};
 
@@ -149,8 +150,7 @@ pub fn main() {
     let monitor = SimpleMonitor::with_user_monitor(
         |s| {
             println!("{s}");
-        },
-        true,
+        }
     );
 
     // The event manager handle the various events generated during the fuzzing loop
@@ -182,15 +182,14 @@ pub fn main() {
         .build(tuple_list!(time_observer, edges_observer))
         .unwrap();
 
-    // if let Some(dynamic_map_size) = executor.coverage_map_size() {
-    //     executor
-    //         .observers_mut()
-    //         .match_name_mut::<ExplicitTracking<HitcountsMapObserver<StdMapObserver<'_, u8, false>>, true, false>>("shared_mem")
-    //         // .match_name_mut::<HitcountsMapObserver<StdMapObserver<'_, u8, false>>>("shared_mem")
-    //         .unwrap()
-    //         .as_mut()
-    //         .truncate(dynamic_map_size);
-    // }
+    if let Some(dynamic_map_size) = executor.coverage_map_size() {
+        executor
+            .observers_mut()
+            .match_name_mut::<ExplicitTracking<HitcountsMapObserver<StdMapObserver<'_, u8, false>>, true, false>>("shared_mem")
+            .unwrap()
+            .as_mut()
+            .truncate(dynamic_map_size);
+    }
 
     // In case the corpus is empty (on first run), reset
     if state.must_load_initial_inputs() {
