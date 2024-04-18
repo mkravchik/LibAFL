@@ -5,7 +5,7 @@ use clap::Parser;
 use libafl::{
     corpus::{Corpus, InMemoryCorpus, OnDiskCorpus},
     events::SimpleEventManager,
-    executors::forkserver::ForkserverExecutor,
+    executors::{forkserver::ForkserverExecutor, HasObservers},
     feedback_and_fast, feedback_or,
     feedbacks::{CrashFeedback, MaxMapFeedback, TimeFeedback},
     fuzzer::{Fuzzer, StdFuzzer},
@@ -26,7 +26,6 @@ use libafl_bolts::{
 };
 use libafl_targets::EDGES_MAP_SIZE_IN_USE;
 use nix::sys::signal::Signal;
-use libafl_targets::{EDGES_MAP_SIZE, EDGES_MAP_PTR};
 
 /// The commandline args this fuzzer accepts
 #[derive(Debug, Parser)]
