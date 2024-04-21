@@ -10,8 +10,11 @@ from ctypes import *
 from collections import defaultdict
 from capstone import *
 from elftools.elf.elffile import ELFFile
-from typing import Tuple
+from elftools.elf.enums import ENUM_EI_CLASS
 
+from typing import List, Tuple
+import bisect
+from copy import copy
 
 verbose = False
 # DrCov file writer based on 
@@ -70,7 +73,7 @@ class DrcovBasicBlockWithCounterReader:
             read = self.file.readinto(bb)
             if read == 0:
                 break
-            self.bbs[HashableDrcovBasicBlock(drcov.DrcovBasicBlock(bb.start, bb.size, bb.mod_id))] = bb.count
+            self.bbs[HashableDrcovBasicBlock(drcov.DrcovBasicBlock(bb.start, bb.size, bb.mod_id))] = (bb.size, bb.count)
 
     def close(self):
         self.file.close()
@@ -155,6 +158,7 @@ class DrcovFile:
 
         for bb in self.bbs:
             # self.file.write(struct.pack("<IHH", bb["start"], bb["size"], bb["module_id"]))
+            print("bb:", bb.mod_id, hex(bb.start), bb.size)
             self.file.write(bb)
 
     def check_module_compatible(self, id, path, base, end):
@@ -213,11 +217,27 @@ class DrcovBasicBlockSizeCalculator:
         self.code_offset, self.text_data, self.trace_address = self._read_text_section()
         self.bbs = {}
         self.disasm = Cs(CS_ARCH_X86, CS_MODE_64)
+        # alternatively, read the PCTable from the ELF file, if present
+        self.pcs = parsePCTable(file_name)
+        if self.pcs is not None:
+            self.pcs = sorted(self.pcs, key=lambda x: x[0])
 
+    def _find_section_offset(self, elffile, section_name):
+        for section in elffile.iter_sections():
+            if section.name == section_name:
+                return section.header.sh_offset
+        return None
+    
     def _read_text_section(self) -> Tuple[int, bytes, int]:
         with open(self.file, 'rb') as f:
             elffile = ELFFile(f)
 
+            # Find the .init section
+            init_section_offset = self._find_section_offset(elffile, '.init')
+            if init_section_offset is None:
+                print(f"No .init section found in {self.file}")                
+                return 0, None, 0
+            
             # Find the .text section
             text_section = None
             for section in elffile.iter_sections():
@@ -227,7 +247,7 @@ class DrcovBasicBlockSizeCalculator:
 
             if text_section is None:
                 print(f"No .text section found in {self.file}")
-                return 0, None
+                return 0, None, 0
 
             # Read the .text section into memory
             text_data = text_section.data()
@@ -237,7 +257,7 @@ class DrcovBasicBlockSizeCalculator:
             symtab = elffile.get_section_by_name('.symtab')  # Get the symbol table
             if not symtab:
                 print("Symbol table not found.")
-                return None
+                return 0, None, 0
             
             for symbol in symtab.iter_symbols():
                 # print(symbol.name)
@@ -245,9 +265,22 @@ class DrcovBasicBlockSizeCalculator:
                     trace_address = symbol['st_value']
                     break
 
-            return text_section.header.sh_offset, text_data, trace_address
+            return text_section.header.sh_offset - init_section_offset, text_data, trace_address
 
     def find_basic_block_size(self, data, address):
+
+        # If we have the PCTable, we can use it to find the size of the basic block
+        pc_table_bb_size = None
+        if self.pcs is not None:
+            # Find the index of the first item greater than address
+            i = bisect.bisect_right(self.pcs, (address,))
+
+            if i != len(self.pcs):
+                pc_table_bb_size = self.pcs[i + 1][0] - address
+                return pc_table_bb_size
+            else:
+                print(f"Address {hex(address)} not found in PCTable")
+                
         """
         Determine the size of a basic block given its start address using Capstone.
         
@@ -260,6 +293,10 @@ class DrcovBasicBlockSizeCalculator:
             """
             # Examples of instructions that could signify the end of a basic block
             # This is a simplified check; more complex logic might be needed for a comprehensive analysis
+            # Moreover, we are insterested in the BBs as PCGuard sees them, so we need to ignore calls to the PCGuard
+            # PCGuard, seem to considers the BB as something other code can jump to
+            # Thus, code after a conditional jump is considered a continuation of the BB
+            # Therefore, this simplified logic in unadequate and I'll leave it here a underapproximation
             if instr.mnemonic == 'call':
                 try:
                     if int(instr.op_str, 16) == ignore_calls_addr:
@@ -267,7 +304,9 @@ class DrcovBasicBlockSizeCalculator:
                 except ValueError:
                     # Keep going
                     pass
-            return instr.mnemonic in ('ret', 'jmp', 'call', 'jne', 'je', 'jg', 'jl', 'jo', 'jno', 'jp', 'jnp', 'jz', 'jnz')
+            return instr.mnemonic in ('ret', 'jmp', 'call', 'jne', 'je', 'jg', 'jl', 'jo', 'jno',
+                                       'jp', 'jnp', 'jz', 'jnz', 'jb', 'jc', 'js', 'jns', 'ja', 'jbe',
+                                       'jl', 'jle', 'jg', 'jge', 'jae', 'jnb', 'jnc', 'jns', 'jno', 'jnp',)
 
         offset = 0
         size = 0
@@ -278,8 +317,18 @@ class DrcovBasicBlockSizeCalculator:
             offset += instr.size
             if is_end_of_basic_block(instr, self.trace_address):
                 break
-                
+
+        # if size != pc_table_bb_size:
+        #     print(f"Size of basic block at {hex(address)}: {size}, {pc_table_bb_size if pc_table_bb_size is not None else ''}")                
         return size
+
+    def get_bb_start(self, bb_start):
+        if self.pcs is not None:
+            bb_index = bb_start
+            if bb_index >= 0 and bb_index < len(self.pcs):
+                return self.pcs[bb_index][0]
+        print(f"Basic block {hex(bb_index)} not found in PCTable")
+        return 0
 
     def get_bb_size(self, bb_start):
         if bb_start in self.bbs:
@@ -417,21 +466,31 @@ def merge_drcov(directory, aggregate, keep=False, output_directory=None, counter
         for bb in tqdm.tqdm(DrcovData.bbs):
             if verbose:
                 print(f"{hex(bb.start), hex(bb.size)}")
-            if fix_sizes and bb.size == 1 and bb.mod_id in bb_size_calcs:
-                bb.size = bb_size_calcs[bb.mod_id].get_bb_size(bb.start)
+            bb_clone = copy(bb) # we need to clone the bb, because we will modify it
+            if fix_sizes and bb.mod_id in bb_size_calcs:
+                if bb.size == 0:
+                    bb.start = bb_size_calcs[bb.mod_id].get_bb_start(bb.start)
+                    bb.size = bb_size_calcs[bb.mod_id].get_bb_size(bb.start)
+                elif bb.size == 1: 
+                    bb.size = bb_size_calcs[bb.mod_id].get_bb_size(bb.start)
+                if verbose:
+                    print(f"{hex(bb.start), hex(bb.size)}")
             bb_exists = writer.add_bb(bb)  
             if counters:
                 def get_bb_counter(bb):
                     if cnt_reader is not None and bb in cnt_reader:
                         if verbose:
                             print(f"Counter for {hex(bb.start)}: {cnt_reader[bb]}")
-                        return cnt_reader[bb]
-                    return 1
+                        return cnt_reader[bb][1]
+                    return 0
                 
                 if not bb_exists:
                     if bb.mod_id not in bb_counters:
-                        bb_counters[bb.mod_id] = defaultdict(int)
-                bb_counters[bb.mod_id][hex(bb.start)] += get_bb_counter(bb)
+                        # bb_counters[bb.mod_id] = defaultdict(int)
+                        bb_counters[bb.mod_id] = defaultdict(lambda: (0, 0))
+                # bb_counters[bb.mod_id][hex(bb.start)] += get_bb_counter(bb_clone)
+                (_, cur_bb_count) = bb_counters[bb.mod_id][hex(bb.start)]
+                bb_counters[bb.mod_id][hex(bb.start)] = (bb.size, cur_bb_count + get_bb_counter(bb_clone))
 
         if not keep:
             os.remove(file)
@@ -548,43 +607,54 @@ def symbolize(args):
 
             if args.verbose:
                 print(f"Module {k}: ")
-            for k1, v1 in v.items():
+            
+            # v1 is a tuple (size, count)
+            for k1, v1 in tqdm.tqdm(v.items()):
+                # Run this loop for each address in the BB, from k1 to k1 + v1[0]
+                # We need to run llvm-symbolizer for each address
+                # But we can combine them in a single call 
+                addresses = []
+                for i in range(v1[0]):
+                    addresses.append(hex(int(k1, 16) + i))
+                addresses_str = " ".join(addresses)
+
                 # Run llvm-symbolizer and capture its output
-                cmd = f"{args.symbolizer} -e={mod_path} --functions=linkage --inlining=false {k1}"
+                cmd = f"{args.symbolizer} -e={mod_path} --functions=linkage --inlining=false {addresses_str}"
                 p = os.popen(cmd)
                 output = p.read()
                 p.close()
                 if args.verbose:
-                    print(f"  {k1}: {v1} times")
+                    print(f"  {addresses_str} (size{v1[0]}): {v1[1]} times")
                     print(output)
                 if coverage_info is not None:
-                    # The llvm-symbolizer output is in the following format:
+                    # The llvm-symbolizer output is in the following format (for each address):
                     # <function name>\n<source file>:<line number>:<column number>\n\n
                     # We need to extract the source file and line number
                     lines = output.split("\n")
 
-                    # Note that we currently discard the function information
-                    # Maybe we could add it, but I havent looked at this yet
-                    parts = lines[1].strip().split(":")
-                    if len(parts) > 1:
-                        file = parts[0].strip()
-                        line = int(parts[1].strip())
-                        # NOTE - we don't have a way to reflect the column number in the coverage.info file
-                        if file in coverage_info:
-                            if line not in coverage_info[file]:
-                                if args.verbose:
-                                    print(f"    Line {line} not found in coverage info file, adding it")
-                            coverage_info[file][line] = v1
-                            if args.verbose: 
-                                print(f"    Line {line}: {coverage_info[file][line]} times")
-                        else:
-                            coverage_info[file] = defaultdict(int)
-                            coverage_info[file][line] = v1
-                        
-                        # # Symbolize using pyelftools
-                        # pfile, pline = py_symbolizers[mod_path].get_file_line(int(k1, 16))
-                        # if args.verbose: 
-                        #     print(f" Python Symbolizers:   {pfile}: {pline}")
+                    for i, addr in enumerate(addresses):
+                        # Note that we currently discard the function information
+                        # Maybe we could add it, but I haven't looked at this yet
+                        parts = lines[i * 3 + 1].strip().split(":")
+                        if len(parts) > 1:
+                            file = parts[0].strip()
+                            line = int(parts[1].strip())
+                            # NOTE - we don't have a way to reflect the column number in the coverage.info file
+                            if file in coverage_info:
+                                if line not in coverage_info[file]:
+                                    if args.verbose:
+                                        print(f"    Line {line} not found in coverage info file, adding it")
+                                coverage_info[file][line] = v1[1]
+                                if args.verbose: 
+                                    print(f"    Line {line}: {coverage_info[file][line]} times")
+                            else:
+                                coverage_info[file] = defaultdict(int)
+                                coverage_info[file][line] = v1[1]
+                            
+                            # # Symbolize using pyelftools
+                            # pfile, pline = py_symbolizers[mod_path].get_file_line(int(k1, 16))
+                            # if args.verbose: 
+                            #     print(f" Python Symbolizers:   {pfile}: {pline}")
                         
     if args.coverage_info is not None:
         if args.coverage_info_output is None:
@@ -601,6 +671,43 @@ def symbolize(args):
                     f.write(f"DA:{line},{count}\n")
                 f.write("end_of_record\n")
 
+# A function that parses the PCTable from an ELF file
+# This table is generated when -fsanitize-coverage=pc-table is specified
+# The table is a list of the structures below, each one representing a basic block
+# struct PcTableEntry {
+#     size_t addr,
+#     size_t flags,
+# };
+# The table resides in the sancov_pcs section
+# Unfortunately, the BBs are not in the strict order of the code,
+# But maybe if we reorder them we can find the sizes of the basic blocks                                                              
+def parsePCTable(elf_file, verbose = False) -> List[Tuple[int, int]]:
+    with open(elf_file, 'rb') as f:
+        elffile = ELFFile(f)
+        # Determine the pointer size from the ELF class
+        pointer_size = 4 if elffile.elfclass == elffile.header['e_ident']['EI_CLASS'] == ENUM_EI_CLASS['ELFCLASS32'] else 8
+
+        # Find the .sancov_pcs section
+        sancov_pcs = None
+        for section in elffile.iter_sections():
+            if section.name == '__sancov_pcs':
+                sancov_pcs = section
+                break
+
+        if sancov_pcs is None:
+            print(f"No .sancov_pcs section found in {elf_file}")
+            return None
+
+        data = sancov_pcs.data()
+        pcs = []
+        for i in range(0, len(data), 2 * pointer_size):
+            addr = int.from_bytes(data[i:i+pointer_size], byteorder='little')
+            flags = int.from_bytes(data[i+pointer_size:i+2*pointer_size], byteorder='little')
+            if verbose:
+                print(f"0x{addr:x}: 0x{flags:x}")
+            pcs.append((addr, flags))
+        return pcs
+    
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Utility to merge files in DrCov format")
@@ -629,6 +736,10 @@ if __name__ == "__main__":
     symbolize_parser.add_argument("-co", "--coverage-info-output", help="The name of input coverage.info. If not specified, the input file will be overwritten.")
     symbolize_parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
 
+    # Add a parser for the 'pc-table' command
+    pc_table_parser = subparsers.add_parser('pc-table')
+    pc_table_parser.add_argument("-i", "--input", required=True, help="Input ELF file")
+    pc_table_parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     args = parser.parse_args()
 
     verbose = args.verbose
@@ -644,5 +755,7 @@ if __name__ == "__main__":
         writer.write()
     elif args.command == "symbolize":
         symbolize(args)
+    elif args.command == "pc-table":
+        parsePCTable(args.input, args.verbose)
     else:
         merge_drcov(args.directory, args.aggregate, args.keep, args.output_directory, args.counters, args.fix_sizes)

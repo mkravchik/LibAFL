@@ -40,6 +40,8 @@ where
     // I'm not sure when the observers are serialized, but I don't want to serialize this
     ranges: RangeMap<usize, (u16, String)>,
     curr_mod_offset: usize,
+    curr_mod_addr: usize,
+    use_pc_table: bool,
 }
 
 impl<S, M> Observer<S> for AccMapObserver<M>
@@ -87,51 +89,67 @@ where
 
             // access the PC Table
             // TODO - check if copying it over makes any difference in performance
-            let pc_table = sanitizer_cov_pc_table();
-            if pc_table.is_none() {
-                log::warn!("PC Table not found, can't create drcov file");
+            let pc_table = if self.use_pc_table {
+                sanitizer_cov_pc_table()
             } else {
-                let pc_table = pc_table.unwrap();
-                log::debug!("PC Table: len: {}", pc_table.len());
-
-                for i in 0..len {
-                    if self.acc[i] == 0 {
-                        continue;
-                    }
-                    // The addresses from PCTable are off by the address of the .init section
-                    drcov_basic_blocks.push(DrCovBasicBlock {
-                        start: pc_table[i].addr() + self.curr_mod_offset,
-                        end: pc_table[i].addr() + self.curr_mod_offset + 1, // TODO - this is not correct, but it's just a placeholder
-                    });
-
-                    bb_counters.push(self.acc[i]);
-                }
-
-                let mut coverage_hasher = RandomState::with_seeds(0, 0, 0, 0).build_hasher();
-                for bb in &drcov_basic_blocks {
-                    coverage_hasher.write_usize(bb.start);
-                    coverage_hasher.write_usize(bb.end);
-                }
-                let coverage_hash = coverage_hasher.finish();
-                let input_name = input.generate_name(0); // The input index is not known at this point, but is not used in the filename
-                let filename = if self.max_cnt > 0 {
-                    self.coverage_directory.join(format!(
-                        "{}_{coverage_hash:016x}_{}-{}.drcov",
-                        &input_name,
-                        self.stored_cnt,
-                        self.stored_cnt + self.cnt
-                    ))
+                None
+            };
+            if self.use_pc_table {
+                if pc_table.is_none() {
+                    log::warn!("PC Table not found, can't create drcov file");
                 } else {
-                    self.coverage_directory
-                        .join(format!("{}_{coverage_hash:016x}.drcov", &input_name))
-                };
-
-                DrCovWriterWithCounter::new(&self.ranges).write(
-                    filename,
-                    &drcov_basic_blocks,
-                    &bb_counters,
-                )?;
+                    log::debug!("PC Table: len: {}", pc_table.unwrap().len());
+                }
             }
+            
+            for i in 0..len {
+                if self.acc[i] == 0 {
+                    continue;
+                }
+                if pc_table.is_none() {
+                    drcov_basic_blocks.push(DrCovBasicBlock {
+                        // I need the address to point to real memory addresses
+                        start: self.curr_mod_addr + i as usize, // this is fixed in the script
+                        end: self.curr_mod_addr + i as usize,// this is fixed in the script start == end indicates to fix the start as well
+                    });
+                }
+                else {
+                    // The addresses from PCTable are real memory addresses 
+                    // The module is mapped starting from the beginning of the .init section
+                    drcov_basic_blocks.push(DrCovBasicBlock {
+                        start: pc_table.unwrap()[i].addr() + self.curr_mod_offset,
+                        end: pc_table.unwrap()[i].addr() + self.curr_mod_offset + 1, // this is fixed in the script
+                    });
+                }
+
+                bb_counters.push(self.acc[i]);
+            }
+
+            let mut coverage_hasher = RandomState::with_seeds(0, 0, 0, 0).build_hasher();
+            for bb in &drcov_basic_blocks {
+                log::debug!("BB: 0x{:x} - 0x{:x}", bb.start, bb.end);
+                coverage_hasher.write_usize(bb.start);
+                coverage_hasher.write_usize(bb.end);
+            }
+            let coverage_hash = coverage_hasher.finish();
+            let input_name = input.generate_name(0); // The input index is not known at this point, but is not used in the filename
+            let filename = if self.max_cnt > 0 {
+                self.coverage_directory.join(format!(
+                    "{}_{coverage_hash:016x}_{}-{}.drcov",
+                    &input_name,
+                    self.stored_cnt,
+                    self.stored_cnt + self.cnt
+                ))
+            } else {
+                self.coverage_directory
+                    .join(format!("{}_{coverage_hash:016x}.drcov", &input_name))
+            };
+
+            DrCovWriterWithCounter::new(&self.ranges).write(
+                filename,
+                &drcov_basic_blocks,
+                &bb_counters,
+            )?;
 
             if self.max_cnt > 0 {
                 self.stored_cnt += self.cnt;
@@ -398,14 +416,24 @@ where
         // Find the current function address
         let curr_mod_func_addr = collect_module_offsets as *const () as usize;
         // Find the module name of the current function in ranges
-        let curr_mod_name = &ranges.get(&curr_mod_func_addr).unwrap().1;
-        // Find the offset of the current module, if it exists
+
+        let (curr_mod_id, curr_mod_name) = &ranges.get(&curr_mod_func_addr).unwrap();
+        // Find the offset of .text section of the current module, if it exists
         let curr_mod_offset = mod_offsets.get(&curr_mod_name as &str).unwrap_or(&0);
         log::info!(
-            "Current module {} offset: 0x{:x}",
+            "Current module {} {} offset: 0x{:x}",
+            curr_mod_id,
             curr_mod_name,
             curr_mod_offset.clone()
         );
+        let mut curr_mod_addr: usize = 0;
+        for (key, val) in ranges.iter() {
+            log::info!("Module: {}{} - 0x{:x}", val.0, val.1, key.start);
+            if val.0 == *curr_mod_id {
+                curr_mod_addr = key.start;
+            }
+        }
+    
         // I'm not sure this is the correct place to initialize the ranges
         // I guess the case of a out-of-proc-server is not handled here,
         // but I will get to it later.
@@ -419,6 +447,8 @@ where
             stored_cnt: 0,
             ranges: ranges,
             curr_mod_offset: curr_mod_offset.clone(),
+            curr_mod_addr: curr_mod_addr,
+            use_pc_table: false,
         }
     }
 
@@ -445,6 +475,12 @@ where
         self
     }
 
+    #[must_use]
+    pub fn use_pc_table(mut self, use_pc_table: bool) -> Self {
+        log::info!("Setting use_pc_table: {}", use_pc_table);
+        self.use_pc_table = use_pc_table;
+        self
+    }
     // /// Sums the hitcounts in the map
     // fn count_hits(&mut self) -> u32 {
     //     let map = self.base.as_mut_slice();
