@@ -22,7 +22,7 @@ use serde::{
 /// BacktraceMetadata
 /// If we use out-of-the-box implementations for Serialize and Deserialize,
 /// The stack is printed in decimal. Leave it if it is OK with you.
-/// The custome serialization below shows how to serialize in hex
+/// The custom serialization below shows how to serialize in hex
 #[derive(
     Debug,
     // Serialize,
