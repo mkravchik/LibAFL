@@ -513,6 +513,12 @@ impl Forkserver {
             Ok(None)
         }
     }
+
+    /// Return the forkserver's pid
+    #[must_use]
+    pub fn pid(&self) -> Pid {
+        Pid::from_raw(self.fsrv_handle.id().try_into().unwrap())
+    }
 }
 
 /// This [`Executor`] can run binaries compiled for AFL/AFL++ that make use of a forkserver.

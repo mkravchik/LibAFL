@@ -24,17 +24,14 @@ which = "4.4"
 libafl = { path = "../../libafl/", features = ["default", "frida_cli"] }
 # libafl = { path = "../../libafl/", features = ["default"] }
 libafl_bolts = { path = "../../libafl_bolts/", features = ["derive", "cli", "frida_cli"]}
-libafl_targets = { path = "../../libafl_targets/", features = ["sancov_pcguard_hitcounts", "libfuzzer", "sancov_cmplog"] }
+libafl_targets = { path = "../../libafl_targets/", features = ["sancov_pcguard_hitcounts", "libfuzzer"] }
 # TODO Include it only when building cc
 libafl_cc = { path = "../../libafl_cc/" }
 mimalloc = { version = "*", default-features = false }
-serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] } # serialization lib
-rangemap = "1.3"
-ahash = "0.8"
 clap_builder = {version = "4.5.1"}
-goblin = "0.7"
 log = "0.4.20"
 env_logger = "0.9"
+toolbox = {path = "../toolbox/"}
 
 [lib]
 name = "libfuzzer_libpng"

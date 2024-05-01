@@ -26,6 +26,7 @@ use libafl_bolts::{
 };
 use libafl_targets::EDGES_MAP_SIZE_IN_USE;
 use nix::sys::signal::Signal;
+use toolbox::accum_observer::AccMapObserver;
 
 /// The commandline args this fuzzer accepts
 #[derive(Debug, Parser)]
@@ -81,6 +82,15 @@ struct Opt {
         default_value = "SIGKILL"
     )]
     signal: Signal,
+
+    /// DrCov cmd options
+    #[arg(long, help = "Save accumulated coverage in DrCov format", default_value = "false")]
+    pub save_bb_coverage: bool,
+
+    /// Accumulate `DrCov` coverage for `N` executions before writing to disk
+    #[arg(long, help = "Accumulate `DrCov` coverage for `N` executions before writing to disk", default_value = "0")]
+    pub drcov_max_execution_cnt: usize,
+
 }
 
 #[allow(clippy::similar_names)]
@@ -110,6 +120,18 @@ pub fn main() {
 
     // Create an observation channel to keep track of the execution time
     let time_observer = TimeObserver::new("time");
+
+    // Create an observation channel accumulating the BB/edges counts in memory and saving in DrCov format
+    // TODO - add the cmd parameters for this observer
+    let acc_observer = unsafe {
+        AccMapObserver::new(StdMapObserver::from_mut_ptr(
+            "edges",
+            EDGES_MAP_PTR,
+            MAP_SIZE,
+        ))
+        .save_dr_cov(opt.save_bb_coverage)
+        .max_cnt(opt.drcov_max_execution_cnt)
+    };
 
     // Feedback to rate the interestingness of an input
     // This one is composed by two Feedbacks in OR
@@ -180,7 +202,7 @@ pub fn main() {
         .coverage_map_size(MAP_SIZE)
         .timeout(Duration::from_millis(opt.timeout))
         .kill_signal(opt.signal)
-        .build(tuple_list!(time_observer, edges_observer))
+        .build(tuple_list!(time_observer, edges_observer, acc_observer))
         .unwrap();
 
     if let Some(dynamic_map_size) = executor.coverage_map_size() {
@@ -188,6 +210,13 @@ pub fn main() {
             .as_mut()
             .truncate(dynamic_map_size);
     }
+
+    let forkserver_pid = executor.forkserver_mut().pid();
+    executor
+        .observers_mut()
+        .match_name_mut::<AccMapObserver<StdMapObserver<'_, u8, false>>>("edges")
+        .map(|observer| observer.read_pid_modules(forkserver_pid.as_raw()));
+
 
     // In case the corpus is empty (on first run), reset
     if state.must_load_initial_inputs() {

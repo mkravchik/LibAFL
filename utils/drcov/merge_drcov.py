@@ -211,14 +211,15 @@ class DrcovFile:
 
 # A class that can return the basic block size in a given module
 class DrcovBasicBlockSizeCalculator:
-    def __init__(self, file_name):
+    def __init__(self, file_name, verbose=False):
         self.file = file_name
         # read the ELF header, find the address of the .text section and read it into memory
         self.code_offset, self.text_data, self.trace_address = self._read_text_section()
         self.bbs = {}
         self.disasm = Cs(CS_ARCH_X86, CS_MODE_64)
+        self.verbose = verbose
         # alternatively, read the PCTable from the ELF file, if present
-        self.pcs = parsePCTable(file_name)
+        self.pcs = parsePCTable(file_name, self.verbose)
         if self.pcs is not None:
             self.pcs = sorted(self.pcs, key=lambda x: x[0])
 
@@ -276,8 +277,12 @@ class DrcovBasicBlockSizeCalculator:
             i = bisect.bisect_right(self.pcs, (address,))
 
             if i != len(self.pcs):
-                pc_table_bb_size = self.pcs[i + 1][0] - address
-                return pc_table_bb_size
+                if i < len(self.pcs) - 1:
+                    pc_table_bb_size = self.pcs[i + 1][0] - address
+                    return pc_table_bb_size
+                else:
+                    # we are in trouble, we are at the last item and I have no idea how to find the size of the BB
+                    print(f"Address {hex(address)} is the last in PCTable, calculating size from disassembly")
             else:
                 print(f"Address {hex(address)} not found in PCTable")
                 
@@ -461,7 +466,7 @@ def merge_drcov(directory, aggregate, keep=False, output_directory=None, counter
                 writer.add_module(m.id, m.path, m.base, m.end)
                 modules[m.id] = {"path": m.path, "base": hex(m.base), "end": hex(m.end)}
                 if fix_sizes and m.id not in bb_size_calcs and m.id == 0: # an optimization, we don't need to calculate the size of the basic blocks for all modules
-                    bb_size_calcs[m.id] = DrcovBasicBlockSizeCalculator(m.path)
+                    bb_size_calcs[m.id] = DrcovBasicBlockSizeCalculator(m.path, verbose=verbose)
 
         for bb in tqdm.tqdm(DrcovData.bbs):
             if verbose:
@@ -587,6 +592,8 @@ def symbolize(args):
             for i, line in enumerate(f):
                 if line.startswith("SF:"):
                     curr_file = line.split(":")[1].strip()
+                    # Convert the path to the absolute path
+                    curr_file = os.path.abspath(curr_file)
                     coverage_info[curr_file] = defaultdict(int)
                 elif line.startswith("DA:"):
                     if curr_file is None:
@@ -648,8 +655,11 @@ def symbolize(args):
                                 if args.verbose: 
                                     print(f"    Line {line}: {coverage_info[file][line]} times")
                             else:
-                                coverage_info[file] = defaultdict(int)
-                                coverage_info[file][line] = v1[1]
+                                if file != "??":
+                                    if args.verbose:
+                                        print(f"    File {file} not found in coverage info file, adding it")
+                                    coverage_info[file] = defaultdict(int)
+                                    coverage_info[file][line] = v1[1]
                             
                             # # Symbolize using pyelftools
                             # pfile, pline = py_symbolizers[mod_path].get_file_line(int(k1, 16))
@@ -704,7 +714,7 @@ def parsePCTable(elf_file, verbose = False) -> List[Tuple[int, int]]:
             addr = int.from_bytes(data[i:i+pointer_size], byteorder='little')
             flags = int.from_bytes(data[i+pointer_size:i+2*pointer_size], byteorder='little')
             if verbose:
-                print(f"0x{addr:x}: 0x{flags:x}")
+                print(f"pctable #{i} addr 0x{addr:x}: 0x{flags:x}")
             pcs.append((addr, flags))
         return pcs
     
