@@ -1,7 +1,5 @@
 //! A libfuzzer-like fuzzer with llmp-multithreading support and restarts
 //! The example harness is built for libpng.
-mod accum_observer;
-
 use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -42,7 +40,7 @@ use libafl_bolts::{
 };
 use libafl_targets::{libfuzzer_initialize, libfuzzer_test_one_input, EDGES_MAP, MAX_EDGES_NUM};
 
-use crate::accum_observer::AccMapObserver;
+use toolbox::accum_observer::AccMapObserver;
 
 /// The main fn, `no_mangle` as it is a C main
 #[cfg(not(test))]
