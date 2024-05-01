@@ -1,0 +1,22 @@
+[package]
+name = "toolbox"
+edition = "2021"
+version.workspace = true
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+debug = true
+
+[dependencies]
+libafl = { path = "../../libafl/", features = ["default"] }
+libafl_bolts = { path = "../../libafl_bolts/", features = ["derive"]}
+libafl_targets = { path = "../../libafl_targets/", features = ["sancov_pcguard_hitcounts", "sancov_cmplog"] }
+serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] } # serialization lib
+rangemap = "1.3"
+ahash = "0.8"
+goblin = "0.7"
+log = "0.4.20"
+libc = "0.2"
+
