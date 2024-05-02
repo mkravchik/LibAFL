@@ -19,4 +19,13 @@ ahash = "0.8"
 goblin = "0.7"
 log = "0.4.20"
 libc = "0.2"
+# for reachability
+serde_yaml = { version = "0.8"} # For parsing the hooks yaml file
+frida-gum = { version = "0.13.6", features = [ "auto-download", "event-sink", "invocation-listener"] }
+libafl_frida = { path = "../../libafl_frida", features = ["cmplog"] }
+hashbrown = "0.14"
+
+# for crash_stack
+backtrace = "0.3"
+
 

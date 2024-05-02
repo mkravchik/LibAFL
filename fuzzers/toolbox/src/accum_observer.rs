@@ -1,12 +1,18 @@
 use std::{
     collections::HashMap,
-    fs,
     hash::{BuildHasher, Hasher},
     path::PathBuf,
 };
 
 use ahash::RandomState;
+
+#[cfg(unix)]
+use std::fs;
+
+#[cfg(unix)]
 use goblin::elf::Elf;
+
+
 use libafl::{
     executors::ExitKind,
     inputs::{Input, UsesInput},
@@ -20,7 +26,6 @@ use libafl_targets::{
 };
 use rangemap::RangeMap;
 use serde::{Deserialize, Serialize};
-use libc::pid_t;
 
 /// Map observer that accumulates hitcounts and saves them in DrCov format.
 ///
@@ -43,7 +48,7 @@ where
     curr_mod_offset: usize,
     curr_mod_addr: usize,
     use_pc_table: bool,
-    target_pid: pid_t,
+    target_pid: u32,
 }
 
 impl<S, M> Observer<S> for AccMapObserver<M>
@@ -253,7 +258,8 @@ where
     }
 }
 
-fn get_pid_name(pid: Option<pid_t>) -> String {
+#[cfg(unix)]
+fn get_pid_name(pid: Option<u32>) -> String {
     match pid {
         Some(pid) => format!("/proc/{}/maps", pid),
         None => "/proc/self/maps".to_string(),
@@ -261,7 +267,7 @@ fn get_pid_name(pid: Option<pid_t>) -> String {
 }
 
 /// A utility function to collect the modules of the current process and their ranges in memory
-pub fn collect_modules(pid: Option<pid_t>) -> Result<RangeMap<usize, (u16, String)>, ()> {
+pub fn collect_modules(pid: Option<u32>) -> Result<RangeMap<usize, (u16, String)>, ()> {
     let mut ranges = RangeMap::new();
     #[cfg(windows)]
     {
@@ -317,7 +323,7 @@ pub fn collect_modules(pid: Option<pid_t>) -> Result<RangeMap<usize, (u16, Strin
     Ok(ranges)
 }
 
-fn collect_module_offsets(pid: Option<pid_t>) -> Result<HashMap<String, usize>, ()> {
+fn collect_module_offsets(pid: Option<u32>) -> Result<HashMap<String, usize>, ()> {
     let mut offsets = HashMap::new();
     #[cfg(windows)]
     {
@@ -392,7 +398,7 @@ fn collect_module_offsets(pid: Option<pid_t>) -> Result<HashMap<String, usize>, 
     Ok(offsets)
 }
 
-fn find_module_params(pid: Option<pid_t>, ranges: &RangeMap<usize, (u16, String)>, find_current: bool) -> (usize, usize) {
+fn find_module_params(pid: Option<u32>, ranges: &RangeMap<usize, (u16, String)>, find_current: bool) -> (usize, usize) {
     let mod_offsets = collect_module_offsets(pid).unwrap();
     let curr_mod_id: u16;
     let mut curr_mod_name: String = String::new();
@@ -495,7 +501,7 @@ where
         self
     }
 
-    pub fn read_pid_modules(&mut self, target: pid_t) {
+    pub fn read_pid_modules(&mut self, target: u32) {
         self.target_pid = target;
         log::info!("Reading modules for pid: {}", target);
         self.ranges = collect_modules(Some(target)).unwrap();
