@@ -11,7 +11,8 @@ use libafl::{
     feedbacks::{Feedback, HasObserverName},
     inputs::{HasTargetBytes, Input},
     observers::{MapObserver, Observer, ObserversTuple, StdMapObserver},
-    state::{HasMetadata, HasNamedMetadata, State},
+    state::State,
+    common::{HasMetadata, HasNamedMetadata},
     Error,
 };
 use libafl::{
@@ -416,13 +417,17 @@ impl Named for ReachabilityObserver {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ReachabilityMetadata {
+    name: String,
     invocations: Vec<String>,
 }
 
 impl ReachabilityMetadata {
     #[must_use]
     pub fn new(invocations: Vec<String>) -> Self {
-        Self { invocations }
+        Self { 
+            name: std::any::type_name::<Self>().to_string(), 
+            invocations 
+        }
     }
 }
 

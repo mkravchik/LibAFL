@@ -8,7 +8,8 @@ use libafl::{
     feedbacks::{Feedback, HasObserverName, NewHashFeedback},
     inputs::UsesInput,
     observers::{BacktraceObserver, HarnessType, Observer, ObserverWithHashField, ObserversTuple},
-    state::{HasMetadata, HasNamedMetadata, State},
+    state::State,
+    common::{HasMetadata, HasNamedMetadata}
 };
 use libafl_bolts::{impl_serdeany, Error, Named};
 use log::{info, warn};
@@ -28,9 +29,22 @@ use serde::{
     // Serialize,
     // Deserialize
 )]
-pub struct BacktraceMetadata(Backtrace);
+pub struct BacktraceMetadata{
+    name: String,
+    inner: Backtrace,
+}
+
 impl_serdeany!(BacktraceMetadata);
 
+impl BacktraceMetadata {
+    #[must_use]
+    pub fn new(bt: Backtrace) -> Self {
+        Self { 
+            name: std::any::type_name::<Self>().to_string(), 
+            inner: bt 
+        }
+    }
+}
 use serde::ser::{SerializeSeq, SerializeStruct, Serializer};
 #[derive(Debug)]
 pub struct PPFrame {
@@ -180,7 +194,7 @@ impl Serialize for BacktraceMetadata {
     where
         S: Serializer,
     {
-        let frames = self.0.frames();
+        let frames = self.inner.frames();
         // let hex_frames: Vec<String> = frames
         //     .iter()
         //     .map(|frame| {
@@ -193,7 +207,8 @@ impl Serialize for BacktraceMetadata {
         //     .collect();
         // let hex_string = hex_frames.join(", ");
         // serializer.serialize_str(&hex_string)
-        let mut seq = serializer.serialize_seq(Some(frames.len()))?;
+        let mut seq = serializer.serialize_seq(Some(frames.len() + 1))?;
+        seq.serialize_element(&self.name)?;
         for frame in frames {
             let pp_frame = PPFrame {
                 ip: frame.ip() as usize,
@@ -232,10 +247,11 @@ impl<'de> Visitor<'de> for BacktraceMetadataVisitor {
     {
         // Read all elements from the sequence
         // while let Some(_) = seq.next_element::<HashMap<String, Self::Value>>()? {}
-
+        // Read the name string and discard it
+        let _ = seq.next_element::<String>().map_err(|err| err);
         while let Some(_) = seq.next_element::<PPFrame>().map_err(|err| err)? {}
         // Always return a current BacktraceMetadata.
-        Ok(BacktraceMetadata(Backtrace::new_unresolved()))
+        Ok(BacktraceMetadata::new(Backtrace::new_unresolved()))
     }
 }
 
@@ -379,7 +395,7 @@ where
         EM: EventFirer<State = S>,
         OT: ObserversTuple<S>,
     {
-        //Delegate to the self.0
+        //Delegate to the self.inner
         self.0
             .is_interesting(state, _manager, _input, observers, _exit_kind)
     }
@@ -408,7 +424,7 @@ where
 
         match observer.get_backtrace() {
             // Performance problem here!
-            Some(b) => testcase.add_metadata(BacktraceMetadata(b.clone())),
+            Some(b) => testcase.add_metadata(BacktraceMetadata::new(b.clone())),
             None => warn! {"{}: append_metadata did not find backtrace!",
             std::process::id().to_string()},
         }
@@ -451,15 +467,15 @@ fn test_backtrace_metadata_serialization() {
         println!("serialized = {}, len {}", serialized, serialized.len());
         let deserialized: BacktraceMetadata = serde_json::from_str(&serialized).unwrap();
         println!("deserialized = {:?}", deserialized);
-        // assert_eq!(backtrace_metadata.0.frames().len(), deserialized.0.frames().len());
-        assert!(deserialized.0.frames().len() > 0);
+        // assert_eq!(backtrace_metadata.inner.frames().len(), deserialized.inner.frames().len());
+        assert!(deserialized.inner.frames().len() > 0);
 
         //test serializing to postcard
         let serialized = postcard::to_allocvec(&backtrace_metadata).unwrap();
         println!("serialized postcard len = {}", serialized.len());
         let deserialized: BacktraceMetadata = postcard::from_bytes(&serialized).unwrap();
         println!("deserialized = {:?}", deserialized);
-        // assert_eq!(backtrace_metadata.0.frames().len(), deserialized.0.frames().len());
-        assert!(deserialized.0.frames().len() > 0);
+        // assert_eq!(backtrace_metadata.inner.frames().len(), deserialized.inner.frames().len());
+        assert!(deserialized.inner.frames().len() > 0);
     }
 }
