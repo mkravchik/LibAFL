@@ -39,7 +39,6 @@ use libafl_bolts::{
     AsSlice,
 };
 use libafl_targets::{libfuzzer_initialize, libfuzzer_test_one_input, EDGES_MAP, MAX_EDGES_NUM};
-
 use toolbox::accum_observer::AccMapObserver;
 
 /// The main fn, `no_mangle` as it is a C main
@@ -93,7 +92,7 @@ fn fuzz(corpus_dirs: &[PathBuf], objective_dir: PathBuf, broker_port: u16) -> Re
     };
 
     let options = FuzzerOptions::try_parse();
-    log::info!("Options: {:?}", options );
+    log::info!("Options: {:?}", options);
     let save_bb_coverage = options
         .as_ref()
         .map(|opts| opts.save_bb_coverage)

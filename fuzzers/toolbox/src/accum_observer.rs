@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use std::fs;
 use std::{
     collections::HashMap,
     hash::{BuildHasher, Hasher},
@@ -5,14 +7,8 @@ use std::{
 };
 
 use ahash::RandomState;
-
-#[cfg(unix)]
-use std::fs;
-
 #[cfg(unix)]
 use goblin::elf::Elf;
-
-
 use libafl::{
     executors::ExitKind,
     inputs::{Input, UsesInput},
@@ -108,7 +104,7 @@ where
                     log::debug!("PC Table: len: {}", pc_table.unwrap().len());
                 }
             }
-            
+
             for i in 0..len {
                 if self.acc[i] == 0 {
                     continue;
@@ -117,11 +113,10 @@ where
                     drcov_basic_blocks.push(DrCovBasicBlock {
                         // I need the address to point to real memory addresses
                         start: self.curr_mod_addr + i as usize, // this is fixed in the script
-                        end: self.curr_mod_addr + i as usize,// this is fixed in the script start == end indicates to fix the start as well
+                        end: self.curr_mod_addr + i as usize, // this is fixed in the script start == end indicates to fix the start as well
                     });
-                }
-                else {
-                    // The addresses from PCTable are real memory addresses 
+                } else {
+                    // The addresses from PCTable are real memory addresses
                     // The module is mapped starting from the beginning of the .init section
                     drcov_basic_blocks.push(DrCovBasicBlock {
                         start: pc_table.unwrap()[i].addr() + self.curr_mod_offset,
@@ -202,7 +197,7 @@ where
 
 impl<M> AsRef<Self> for AccMapObserver<M>
 where
-M: MapObserver,
+    M: MapObserver,
 {
     fn as_ref(&self) -> &Self {
         self
@@ -323,6 +318,8 @@ pub fn collect_modules(pid: Option<u32>) -> Result<RangeMap<usize, (u16, String)
     Ok(ranges)
 }
 
+// Reads the .init section offset of each module in the process.
+// This is used to calculate the real memory address of the basic blocks
 fn collect_module_offsets(pid: Option<u32>) -> Result<HashMap<String, usize>, ()> {
     let mut offsets = HashMap::new();
     #[cfg(windows)]
@@ -398,7 +395,14 @@ fn collect_module_offsets(pid: Option<u32>) -> Result<HashMap<String, usize>, ()
     Ok(offsets)
 }
 
-fn find_module_params(pid: Option<u32>, ranges: &RangeMap<usize, (u16, String)>, find_current: bool) -> (usize, usize) {
+// Finds the start address and the .init section offset of the module
+// Can be used for the current module (useful when the fuzzer is linked into the target binary)
+// of for the first module in the process (useful when the fuzzer is a separate process)
+fn find_module_params(
+    pid: Option<u32>,
+    ranges: &RangeMap<usize, (u16, String)>,
+    find_current: bool,
+) -> (usize, usize) {
     let mod_offsets = collect_module_offsets(pid).unwrap();
     let curr_mod_id: u16;
     let mut curr_mod_name: String = String::new();
@@ -409,17 +413,15 @@ fn find_module_params(pid: Option<u32>, ranges: &RangeMap<usize, (u16, String)>,
 
         (curr_mod_id, curr_mod_name) = (*ranges.get(&curr_mod_func_addr).unwrap()).clone();
         // Find the offset of .text section of the current module, if it exists
-    }
-    else {
+    } else {
         curr_mod_id = 0; // use the first module. Is this always correct?
-        // curr_mod_name = ranges.get(&0).unwrap().1.clone();
+                         // curr_mod_name = ranges.get(&0).unwrap().1.clone();
         for (_, val) in ranges.iter() {
             if val.0 == curr_mod_id {
                 curr_mod_name = val.1.clone();
                 break;
             }
         }
-    
     }
     let mod_offset = mod_offsets.get(&curr_mod_name as &str).unwrap_or(&0);
     log::info!(
@@ -453,7 +455,7 @@ where
             .expect("failed to create directory for coverage files");
 
         let ranges = collect_modules(None).unwrap();
-        let (curr_mod_offset, curr_mod_addr) = find_module_params(None, &ranges, true);    
+        let (curr_mod_offset, curr_mod_addr) = find_module_params(None, &ranges, true);
 
         Self {
             base,
@@ -505,9 +507,10 @@ where
         self.target_pid = target;
         log::info!("Reading modules for pid: {}", target);
         self.ranges = collect_modules(Some(target)).unwrap();
-        let (curr_mod_offset, curr_mod_addr) = find_module_params(Some(target), &self.ranges, false);
+        let (curr_mod_offset, curr_mod_addr) =
+            find_module_params(Some(target), &self.ranges, false);
         self.curr_mod_offset = curr_mod_offset;
-        self.curr_mod_addr = curr_mod_addr;    
+        self.curr_mod_addr = curr_mod_addr;
     }
     // /// Sums the hitcounts in the map
     // fn count_hits(&mut self) -> u32 {

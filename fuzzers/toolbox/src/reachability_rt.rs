@@ -6,13 +6,13 @@ use std::{
 use frida_gum::{interceptor::Interceptor, Gum, ModuleMap, NativePointer};
 use hashbrown::HashMap;
 use libafl::{
+    common::{HasMetadata, HasNamedMetadata},
     corpus::Testcase,
     events::EventFirer,
     feedbacks::{Feedback, HasObserverName},
     inputs::{HasTargetBytes, Input},
     observers::{MapObserver, Observer, ObserversTuple, StdMapObserver},
     state::State,
-    common::{HasMetadata, HasNamedMetadata},
     Error,
 };
 use libafl::{
@@ -232,61 +232,9 @@ impl ReachabilityRuntime {
     }
 
     fn hook_functions(&mut self, gum: &Gum) {
-        // let mut interceptor = Interceptor::obtain(gum);
-
-        // macro_rules! hook_func {
-        //     ($lib:expr, $name:ident, ($($param:ident : $param_type:ty),*), $return_type:ty) => {
-        //         paste::paste! {
-        //             log::trace!("Hooking {}", stringify!($name));
-        //             extern "C" {
-        //                 fn $name($($param: $param_type),*) -> $return_type;
-        //             }
-        //             let hook_idx = self.inner.borrow().hooks_cnt;
-        //             self.inner.borrow_mut().hook_indices.insert(stringify!($name).to_string(), hook_idx);
-        //             #[allow(non_snake_case)]
-        //             unsafe extern "C" fn [<replacement_ $name>]($($param: $param_type),*) -> $return_type {
-        //                 // Set the execution in the map
-        //                 let mut invocation = Interceptor::current_invocation();
-        //                 let this = &mut *(invocation.replacement_data().unwrap().0 as *mut ReachabilityRuntime);
-        //                 let cur_hook_idx = *this.inner.borrow().hook_indices.get(stringify!($name)).unwrap();
-        //                 this.inner.borrow_mut().map[cur_hook_idx as usize] += 1;
-        //                 log::trace!("Calling {}, hook idx {}", stringify!($name), cur_hook_idx);
-        //                 $name($($param),*)
-        //             }
-        //             interceptor.replace(
-        //                 frida_gum::Module::find_export_by_name($lib, stringify!($name)).expect("Failed to find function"),
-        //                 NativePointer([<replacement_ $name>] as *mut c_void),
-        //                 NativePointer(core::ptr::from_mut(self) as *mut c_void)
-        //             ).ok();
-        //             self.inner.borrow_mut().hooks_cnt += 1;
-        //         }
-        //     }
-        // }
-
-        #[cfg(target_os = "windows")]
-        {
-            let hooks = self.inner.borrow().hooks.hooks.clone();
-            for hook in hooks {
-                self.hook_function(gum, hook);
-            }
-            // let functions_to_hook = vec![
-            //     FunctionToHook {
-            //         module: "kernel32.dll".to_string(),
-            //         name: "LoadLibraryW".to_string(),
-            //         params_cnt: 1,
-            //     },
-            //     FunctionToHook {
-            //         module: "kernel32.dll".to_string(),
-            //         name: "LoadLibraryExW".to_string(),
-            //         params_cnt: 3,
-            //     },
-            // ];
-            // for to_hook in functions_to_hook {
-            //     self.hook_function(gum, to_hook);
-            // }
-
-            // hook_func!(Some("kernel32.dll"), LoadLibraryW, (lpLibFileName: *const u16), *mut c_void);
-            // hook_func!(Some("kernel32.dll"), LoadLibraryExW, (lpLibFileName: *const u16, hFile: *mut c_void, dwFlags: c_int), *mut c_void);
+        let hooks = self.inner.borrow().hooks.hooks.clone();
+        for hook in hooks {
+            self.hook_function(gum, hook);
         }
         log::info!("Hooked {} functions", self.inner.borrow().hooks_cnt);
     }
@@ -424,9 +372,9 @@ pub struct ReachabilityMetadata {
 impl ReachabilityMetadata {
     #[must_use]
     pub fn new(invocations: Vec<String>) -> Self {
-        Self { 
-            name: std::any::type_name::<Self>().to_string(), 
-            invocations 
+        Self {
+            name: std::any::type_name::<Self>().to_string(),
+            invocations,
         }
     }
 }
