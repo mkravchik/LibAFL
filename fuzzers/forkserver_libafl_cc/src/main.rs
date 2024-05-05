@@ -84,13 +84,20 @@ struct Opt {
     signal: Signal,
 
     /// DrCov cmd options
-    #[arg(long, help = "Save accumulated coverage in DrCov format", default_value = "false")]
+    #[arg(
+        long,
+        help = "Save accumulated coverage in DrCov format",
+        default_value = "false"
+    )]
     pub save_bb_coverage: bool,
 
     /// Accumulate `DrCov` coverage for `N` executions before writing to disk
-    #[arg(long, help = "Accumulate `DrCov` coverage for `N` executions before writing to disk", default_value = "0")]
+    #[arg(
+        long,
+        help = "Accumulate `DrCov` coverage for `N` executions before writing to disk",
+        default_value = "0"
+    )]
     pub drcov_max_execution_cnt: usize,
-
 }
 
 #[allow(clippy::similar_names)]
@@ -216,7 +223,6 @@ pub fn main() {
         .observers_mut()
         .match_name_mut::<AccMapObserver<StdMapObserver<'_, u8, false>>>("edges")
         .map(|observer| observer.read_pid_modules(forkserver_pid.as_raw()));
-
 
     // In case the corpus is empty (on first run), reset
     if state.must_load_initial_inputs() {

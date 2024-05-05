@@ -57,17 +57,15 @@ use libafl_frida::{
     helper::FridaInstrumentationHelper,
 };
 use libafl_targets::cmplog::CmpLogObserver;
-
-use toolbox::
-    {
-        reachability_rt::{
-            ReachabilityFeedback,
-            // MAP_SIZE as REACHABILITY_MAP_SIZE,
-            ReachabilityObserver,
-            ReachabilityRuntime,
-        },
-        crash_stack::{BacktraceObserverWithStack, NewHashFeedbackWithStack}
-    };
+use toolbox::{
+    crash_stack::{BacktraceObserverWithStack, NewHashFeedbackWithStack},
+    reachability_rt::{
+        ReachabilityFeedback,
+        // MAP_SIZE as REACHABILITY_MAP_SIZE,
+        ReachabilityObserver,
+        ReachabilityRuntime,
+    },
+};
 
 /// The main fn, usually parsing parameters, and starting the fuzzer
 pub fn main() {
