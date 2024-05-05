@@ -2,6 +2,7 @@ use std::fmt;
 
 use backtrace::Backtrace;
 use libafl::{
+    common::{HasMetadata, HasNamedMetadata},
     corpus::Testcase,
     events::EventFirer,
     executors::ExitKind,
@@ -9,7 +10,6 @@ use libafl::{
     inputs::UsesInput,
     observers::{BacktraceObserver, HarnessType, Observer, ObserverWithHashField, ObserversTuple},
     state::State,
-    common::{HasMetadata, HasNamedMetadata}
 };
 use libafl_bolts::{impl_serdeany, Error, Named};
 use log::{info, warn};
@@ -21,15 +21,9 @@ use serde::{
 };
 
 /// BacktraceMetadata
-/// If we use out-of-the-box implementations for Serialize and Deserialize,
-/// The stack is printed in decimal. Leave it if it is OK with you.
 /// The custom serialization below shows how to serialize in hex
-#[derive(
-    Debug,
-    // Serialize,
-    // Deserialize
-)]
-pub struct BacktraceMetadata{
+#[derive(Debug)]
+pub struct BacktraceMetadata {
     name: String,
     inner: Backtrace,
 }
@@ -39,9 +33,9 @@ impl_serdeany!(BacktraceMetadata);
 impl BacktraceMetadata {
     #[must_use]
     pub fn new(bt: Backtrace) -> Self {
-        Self { 
-            name: std::any::type_name::<Self>().to_string(), 
-            inner: bt 
+        Self {
+            name: std::any::type_name::<Self>().to_string(),
+            inner: bt,
         }
     }
 }
@@ -462,7 +456,7 @@ where
 #[test]
 fn test_backtrace_metadata_serialization() {
     for backtrace in [Backtrace::new_unresolved(), Backtrace::new()].iter() {
-        let backtrace_metadata = BacktraceMetadata(backtrace.clone());
+        let backtrace_metadata = BacktraceMetadata::new(backtrace.clone());
         let serialized = serde_json::to_string(&backtrace_metadata).unwrap();
         println!("serialized = {}, len {}", serialized, serialized.len());
         let deserialized: BacktraceMetadata = serde_json::from_str(&serialized).unwrap();
