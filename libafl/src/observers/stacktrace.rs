@@ -70,7 +70,7 @@ pub fn collect_backtrace() -> u64 {
         }
     }
     // will use symbols later
-    let trace = format!("{:?}", b);
+    let trace = format!("{b:?}");
     log::trace!("{}", trace);
     log::info!(
         "backtrace collected with hash={} at pid={}",
