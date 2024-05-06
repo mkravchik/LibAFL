@@ -1,0 +1,180 @@
+{
+  "metadata": {
+    "map": {
+      "67040840998315034357867071195806918738": [
+        67040840998315034357867071195806918738,
+        "Crash"
+      ],
+      "151287823049168717282094736171097445375": [
+        151287823049168717282094736171097445375,
+        [
+          "toolbox::crash_stack::BacktraceMetadata",
+          {
+            "ip": "0x7ff629bd928e",
+            "symbol_address": "0x7ff629bd928e",
+            "module_base_address": "0x7ff629af0000",
+            "symbols": "BacktraceSymbol { name: Some(\"backtrace::backtrace::dbghelp::trace\"), addr: Some(0x7ff629bd9257), filename: Some(\"C:\\\\Users\\\\mkrav\\\\.cargo\\\\registry\\\\src\\\\index.crates.io-6f17d22bba15001f\\\\backtrace-0.3.69\\\\src\\\\backtrace\\\\dbghelp.rs\"), lineno: Some(98), colno: None }"
+          },
+          {
+            "ip": "0x7ff629bd928e",
+            "symbol_address": "0x7ff629bd928e",
+            "module_base_address": "0x7ff629af0000",
+            "symbols": "BacktraceSymbol { name: Some(\"backtrace::backtrace::trace_unsynchronized\"), addr: Some(0x7ff629bd9257), filename: Some(\"C:\\\\Users\\\\mkrav\\\\.cargo\\\\registry\\\\src\\\\index.crates.io-6f17d22bba15001f\\\\backtrace-0.3.69\\\\src\\\\backtrace\\\\mod.rs\"), lineno: Some(66), colno: None }"
+          },
+          {
+            "ip": "0x7ff629bd928e",
+            "symbol_address": "0x7ff629bd928e",
+            "module_base_address": "0x7ff629af0000",
+            "symbols": "BacktraceSymbol { name: Some(\"backtrace::backtrace::trace\"), addr: Some(0x7ff629bd9245), filename: Some(\"C:\\\\Users\\\\mkrav\\\\.cargo\\\\registry\\\\src\\\\index.crates.io-6f17d22bba15001f\\\\backtrace-0.3.69\\\\src\\\\backtrace\\\\mod.rs\"), lineno: Some(53), colno: None }"
+          },
+          {
+            "ip": "0x7ff629bd928e",
+            "symbol_address": "0x7ff629bd928e",
+            "module_base_address": "0x7ff629af0000",
+            "symbols": "BacktraceSymbol { name: Some(\"backtrace::capture::Backtrace::create\"), addr: Some(0x7ff629bd91f0), filename: Some(\"C:\\\\Users\\\\mkrav\\\\.cargo\\\\registry\\\\src\\\\index.crates.io-6f17d22bba15001f\\\\backtrace-0.3.69\\\\src\\\\capture.rs\"), lineno: Some(176), colno: None }"
+          },
+          {
+            "ip": "0x7ff629bd86ad",
+            "symbol_address": "0x7ff629bd86ad",
+            "module_base_address": "0x7ff629af0000",
+            "symbols": "BacktraceSymbol { name: Some(\"backtrace::capture::Backtrace::new\"), addr: Some(0x7ff629bd8660), filename: Some(\"C:\\\\Users\\\\mkrav\\\\.cargo\\\\registry\\\\src\\\\index.crates.io-6f17d22bba15001f\\\\backtrace-0.3.69\\\\src\\\\capture.rs\"), lineno: Some(140), colno: None }"
+          },
+          {
+            "ip": "0x7ff629b673f4",
+            "symbol_address": "0x7ff629b673f4",
+            "module_base_address": "0x7ff629af0000",
+            "symbols": "BacktraceSymbol { name: Some(\"libafl::observers::impl$1::post_exec_all\"), addr: Some(0x7ff629b67042), filename: Some(\"E:\\\\LibAFL\\\\libafl\\\\src\\\\observers\\\\mod.rs\"), lineno: Some(235), colno: None }"
+          },
+          {
+            "ip": "0x7ff629b673f4",
+            "symbol_address": "0x7ff629b673f4",
+            "module_base_address": "0x7ff629af0000",
+            "symbols": "BacktraceSymbol { name: Some(\"libafl::observers::impl$1::post_exec_all\"), addr: Some(0x7ff629b67028), filename: Some(\"E:\\\\LibAFL\\\\libafl\\\\src\\\\observers\\\\mod.rs\"), lineno: Some(235), colno: None }"
+          },
+          {
+            "ip": "0x7ff629b673f4",
+            "symbol_address": "0x7ff629b673f4",
+            "module_base_address": "0x7ff629af0000",
+            "symbols": "BacktraceSymbol { name: Some(\"libafl::observers::impl$1::post_exec_all<libafl::observers::map::ExplicitTracking<libafl::observers::map::HitcountsMapObserver<libafl::observers::map::StdMapObserver<u8,false> >,true,false>,tuple$<libafl::observers::TimeObserver,tuple$<toolbox::reachabili\"), addr: Some(0x7ff629b66f60), filename: Some(\"E:\\\\LibAFL\\\\libafl\\\\src\\\\observers\\\\mod.rs\"), lineno: Some(235), colno: None }"
+          },
+          {
+            "ip": "0x7ff629b64589",
+            "symbol_address": "0x7ff629b64589",
+            "module_base_address": "0x7ff629af0000",
+            "symbols": "BacktraceSymbol { name: Some(\"libafl::executors::inprocess::run_observers_and_save_state<libafl::executors::inprocess::GenericInProcessExecutor<frida_gdiplus::fuzzer::fuzz::closure$1::closure_env$0,ref_mut$<frida_gdiplus::fuzzer::fuzz::closure$1::closure_env$0>,tuple$<>,tuple$<libafl:\"), addr: Some(0x7ff629b64530), filename: Some(\"E:\\\\LibAFL\\\\libafl\\\\src\\\\executors\\\\inprocess\\\\mod.rs\"), lineno: Some(443), colno: None }"
+          },
+          {
+            "ip": "0x7ff629b63332",
+            "symbol_address": "0x7ff629b63332",
+            "module_base_address": "0x7ff629af0000",
+            "symbols": "BacktraceSymbol { name: Some(\"libafl::executors::hooks::windows::windows_exception_handler::inproc_crash_handler<libafl::executors::inprocess::GenericInProcessExecutor<frida_gdiplus::fuzzer::fuzz::closure$1::closure_env$0,ref_mut$<frida_gdiplus::fuzzer::fuzz::closure$1::closure_env$0>\"), addr: Some(0x7ff629b62f60), filename: Some(\"E:\\\\LibAFL\\\\libafl\\\\src\\\\executors\\\\hooks\\\\windows.rs\"), lineno: Some(492), colno: None }"
+          },
+          {
+            "ip": "0x7ff629de326b",
+            "symbol_address": "0x7ff629de326b",
+            "module_base_address": "0x7ff629af0000",
+            "symbols": "BacktraceSymbol { name: Some(\"libafl::executors::hooks::windows::windows_exception_handler::impl$0::handle\"), addr: Some(0x7ff629de3240), filename: Some(\"E:\\\\LibAFL\\\\libafl\\\\src\\\\executors\\\\hooks\\\\windows.rs\"), lineno: Some(155), colno: None }"
+          },
+          {
+            "ip": "0x7ff629e12471",
+            "symbol_address": "0x7ff629e12471",
+            "module_base_address": "0x7ff629af0000",
+            "symbols": "BacktraceSymbol { name: Some(\"libafl_bolts::os::windows_exceptions::internal_handle_exception\"), addr: Some(0x7ff629e11ff0), filename: Some(\"E:\\\\LibAFL\\\\libafl_bolts\\\\src\\\\os\\\\windows_exceptions.rs\"), lineno: Some(331), colno: None }"
+          },
+          {
+            "ip": "0x7ff629e11fc3",
+            "symbol_address": "0x7ff629e11fc3",
+            "module_base_address": "0x7ff629af0000",
+            "symbols": "BacktraceSymbol { name: Some(\"libafl_bolts::os::windows_exceptions::handle_exception\"), addr: Some(0x7ff629e11d70), filename: Some(\"E:\\\\LibAFL\\\\libafl_bolts\\\\src\\\\os\\\\windows_exceptions.rs\"), lineno: Some(369), colno: None }"
+          },
+          {
+            "ip": "0x7ffc44e08b1c",
+            "symbol_address": "0x7ffc44e08b1c",
+            "module_base_address": "0x7ffc44d90000",
+            "symbols": "BacktraceSymbol { name: Some(\"RtlDeleteAce\"), addr: Some(0x7ffc44e08750), filename: None, lineno: None, colno: None }"
+          },
+          {
+            "ip": "0x7ffc44de12d6",
+            "symbol_address": "0x7ffc44de12d6",
+            "module_base_address": "0x7ffc44d90000",
+            "symbols": "BacktraceSymbol { name: Some(\"RtlRaiseException\"), addr: Some(0x7ffc44de1030), filename: None, lineno: None, colno: None }"
+          },
+          {
+            "ip": "0x7ff629f50a53",
+            "symbol_address": "0x7ff629f50a53",
+            "module_base_address": "0x7ff629af0000",
+            "symbols": "BacktraceSymbol { name: Some(\"gum_exceptor_backend_dispatch\"), addr: Some(0x7ff629f508c0), filename: Some(\"D:\\\\a\\\\frida\\\\frida\\\\frida-gum\\\\gum\\\\backend-windows\\\\gumexceptor-windows.c\"), lineno: Some(286), colno: None }"
+          },
+          {
+            "ip": "0x7ffc44e30ebe",
+            "symbol_address": "0x7ffc44e30ebe",
+            "module_base_address": "0x7ffc44d90000",
+            "symbols": "BacktraceSymbol { name: Some(\"KiUserExceptionDispatcher\"), addr: Some(0x7ffc44e30e90), filename: None, lineno: None, colno: None }"
+          },
+          {
+            "ip": "0x2e0c0de4083",
+            "symbol_address": "0x2e0c0de4083",
+            "module_base_address": "0x0",
+            "symbols": "No symbol"
+          },
+          {
+            "ip": "0x1",
+            "symbol_address": "0x1",
+            "module_base_address": "0x0",
+            "symbols": "No symbol"
+          },
+          {
+            "ip": "0x7ffc44da2782",
+            "symbol_address": "0x7ffc44da2782",
+            "module_base_address": "0x7ffc44d90000",
+            "symbols": "BacktraceSymbol { name: Some(\"TpSetTimerEx\"), addr: Some(0x7ffc44da26d0), filename: None, lineno: None, colno: None }"
+          },
+          {
+            "ip": "0x7ff629b57a31",
+            "symbol_address": "0x7ff629b57a31",
+            "module_base_address": "0x7ff629af0000",
+            "symbols": "BacktraceSymbol { name: Some(\"frida_gdiplus::fuzzer::fuzz::closure$1::closure$0\"), addr: Some(0x7ff629b57a25), filename: Some(\"E:\\\\LibAFL\\\\fuzzers\\\\frida_gdiplus\\\\src\\\\fuzzer.rs\"), lineno: Some(104), colno: None }"
+          },
+          {
+            "ip": "0x7ff629b57a31",
+            "symbol_address": "0x7ff629b57a31",
+            "module_base_address": "0x7ff629af0000",
+            "symbols": "BacktraceSymbol { name: Some(\"libafl::executors::inprocess::impl$3::run_target\"), addr: Some(0x7ff629b57952), filename: Some(\"E:\\\\LibAFL\\\\libafl\\\\src\\\\executors\\\\inprocess\\\\mod.rs\"), lineno: Some(137), colno: None }"
+          },
+          {
+            "ip": "0x7ff629b57a31",
+            "symbol_address": "0x7ff629b57a31",
+            "module_base_address": "0x7ff629af0000",
+            "symbols": "BacktraceSymbol { name: Some(\"libafl_frida::executor::impl$1::run_target\"), addr: Some(0x7ff629b578c0), filename: Some(\"E:\\\\LibAFL\\\\libafl_frida\\\\src\\\\executor.rs\"), lineno: Some(103), colno: None }"
+          },
+          {
+            "ip": "0x7ff629b57a31",
+            "symbol_address": "0x7ff629b57a31",
+            "module_base_address": "0x7ff629af0000",
+            "symbols": "BacktraceSymbol { name: Some(\"libafl::fuzzer::StdFuzzer<libafl::schedulers::minimizer::MinimizerScheduler<libafl::schedulers::queue::QueueScheduler<libafl::state::StdState<libafl::inputs::bytes::BytesInput,libafl::corpus::cached::CachedOnDiskCorpus<libafl::inputs::bytes::BytesInput>,l\"), addr: Some(0x7ff629b5773d), filename: Some(\"E:\\\\LibAFL\\\\libafl\\\\src\\\\fuzzer\\\\mod.rs\"), lineno: Some(775), colno: None }"
+          },
+          {
+            "ip": "0x7ff629b57a31",
+            "symbol_address": "0x7ff629b57a31",
+            "module_base_address": "0x7ff629af0000",
+            "symbols": "BacktraceSymbol { name: Some(\"libafl::fuzzer::impl$5::evaluate_input_with_observers\"), addr: Some(0x7ff629b5773d), filename: Some(\"E:\\\\LibAFL\\\\libafl\\\\src\\\\fuzzer\\\\mod.rs\"), lineno: Some(541), colno: None }"
+          },
+          {
+            "ip": "0x7ff629b57a31",
+            "symbol_address": "0x7ff629b57a31",
+            "module_base_address": "0x7ff629af0000",
+            "symbols": "BacktraceSymbol { name: Some(\"libafl::fuzzer::impl$6::evaluate_input_events\"), addr: Some(0x7ff629b5773d), filename: Some(\"E:\\\\LibAFL\\\\libafl\\\\src\\\\fuzzer\\\\mod.rs\"), lineno: Some(570), colno: None }"
+          },
+          {
+            "ip": "0x7ff629b57a31",
+            "symbol_address": "0x7ff629b57a31",
+            "module_base_address": "0x7ff629af0000",
+            "symbols": "BacktraceSymbol { name: Some(\"libafl::fuzzer::Evaluator::evaluate_input<libafl::fuzzer::StdFuzzer<libafl::schedulers::minimizer::MinimizerScheduler<libafl::schedulers::queue::QueueScheduler<libafl::state::StdState<libafl::inputs::bytes::BytesInput,libafl::corpus::cached::CachedOnDiskC\"), addr: Some(0x7ff629b576d0), filename: Some(\"E:\\\\LibAFL\\\\libafl\\\\src\\\\fuzzer\\\\mod.rs\"), lineno: Some(144), colno: None }"
+          }
+        ]
+      ]
+    }
+  },
+  "exec_time": null,
+  "executions": 38
+}
