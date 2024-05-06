@@ -54,8 +54,7 @@ pub fn collect_backtrace() -> u64 {
     }
     let mut hash = 0;
     for frame in &b.frames()[1..] {
-        if frame.module_base_address().is_some()
-            && !frame.module_base_address().unwrap().is_null()
+        if frame.module_base_address().is_some() && !frame.module_base_address().unwrap().is_null()
         {
             hash ^= frame.ip() as u64;
             log::info!(
