@@ -437,7 +437,7 @@ pub mod windows_exception_handler {
                     }
                 }
             } else {
-                // log::trace!("Exception code received, but {code} is not in CRASH_EXCEPTIONS");
+                log::info!("Exception code received, but {code} is not in CRASH_EXCEPTIONS");
                 is_crash = false;
             }
         } else {
@@ -483,11 +483,12 @@ pub mod windows_exception_handler {
             if is_crash {
                 log::error!("Child crashed!");
             } else {
-                // log::info!("Exception received!");
+                log::info!("Exception received!");
             }
 
             // Make sure we don't crash in the crash handler forever.
             if is_crash {
+                log::info!("Running observers and exiting!");
                 let input = data.take_current_input::<<E::State as UsesInput>::Input>();
                 {
                     let mut bsod = Vec::new();
@@ -517,6 +518,6 @@ pub mod windows_exception_handler {
             log::info!("Exiting!");
             ExitProcess(1);
         }
-        // log::info!("Not Exiting!");
+        log::info!("Not Exiting!");
     }
 }

@@ -484,6 +484,11 @@ unsafe fn internal_handle_exception(
                 .unwrap();
             let handler = &mut **handler_holder.handler.get();
             handler.handle(exception_code, exception_pointers);
+            info!(
+                "{:?}: Returning EXCEPTION_CONTINUE_SEARCH",
+                std::process::id()
+            );
+
             EXCEPTION_CONTINUE_SEARCH
         }
     }
