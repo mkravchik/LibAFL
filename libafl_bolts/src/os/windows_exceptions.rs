@@ -11,7 +11,7 @@ use core::{
 use std::os::raw::{c_long, c_void};
 
 use log::info;
-use num_enum::TryFromPrimitive;
+use num_enum::FromPrimitive;
 pub use windows::Win32::{
     Foundation::{BOOL, NTSTATUS},
     System::{
@@ -94,7 +94,7 @@ pub const STATUS_SXS_EARLY_DEACTIVATION: i32 = 0xC015000F;
 pub const STATUS_SXS_INVALID_DEACTIVATION: i32 = 0xC0150010;
 pub const STATUS_NOT_IMPLEMENTED: i32 = 0xC0000002;
 
-#[derive(Debug, TryFromPrimitive, Clone, Copy)]
+#[derive(Debug, FromPrimitive, Clone, Copy)]
 #[repr(i32)]
 pub enum ExceptionCode {
     // From https://docs.microsoft.com/en-us/windows/win32/debug/getexceptioncode
@@ -343,6 +343,11 @@ unsafe fn internal_handle_exception(
                 .unwrap();
             let handler = &mut **handler_holder.handler.get();
             handler.handle(exception_code, exception_pointers);
+            info!(
+                "{:?}: Returning EXCEPTION_CONTINUE_SEARCH",
+                std::process::id()
+            );
+
             EXCEPTION_CONTINUE_SEARCH
         }
     }
@@ -361,10 +366,7 @@ pub unsafe extern "system" fn handle_exception(
         .as_mut()
         .unwrap()
         .ExceptionCode;
-    let exception_code = match ExceptionCode::try_from(code.0) {
-        Ok(x) => x,
-        Err(_) => ExceptionCode::Other,
-    };
+    let exception_code = From::from(code.0);
     log::info!("Received exception; code: {}", exception_code);
     internal_handle_exception(exception_code, exception_pointers)
 }

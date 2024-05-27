@@ -330,15 +330,14 @@ pub mod windows_exception_handler {
         let mut is_crash = true;
         #[cfg(feature = "std")]
         if let Some(exception_pointers) = exception_pointers.as_mut() {
-            let code = ExceptionCode::try_from(
+            let code = ExceptionCode::from(
                 exception_pointers
                     .ExceptionRecord
                     .as_mut()
                     .unwrap()
                     .ExceptionCode
                     .0,
-            )
-            .unwrap();
+            );
 
             let exception_list = data.exceptions();
             if exception_list.contains(&code) {
@@ -436,7 +435,7 @@ pub mod windows_exception_handler {
                     }
                 }
             } else {
-                // log::trace!("Exception code received, but {code} is not in CRASH_EXCEPTIONS");
+                log::info!("Exception code received, but {code} is not in CRASH_EXCEPTIONS");
                 is_crash = false;
             }
         } else {
@@ -482,11 +481,12 @@ pub mod windows_exception_handler {
             if is_crash {
                 log::error!("Child crashed!");
             } else {
-                // log::info!("Exception received!");
+                log::info!("Exception received!");
             }
 
             // Make sure we don't crash in the crash handler forever.
             if is_crash {
+                log::info!("Running observers and exiting!");
                 let input = data.take_current_input::<<E::State as UsesInput>::Input>();
 
                 run_observers_and_save_state::<E, EM, OF, Z>(
@@ -506,6 +506,6 @@ pub mod windows_exception_handler {
             log::info!("Exiting!");
             ExitProcess(1);
         }
-        // log::info!("Not Exiting!");
+        log::info!("Not Exiting!");
     }
 }
