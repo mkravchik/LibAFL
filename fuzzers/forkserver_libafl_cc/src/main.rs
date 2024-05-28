@@ -222,7 +222,7 @@ pub fn main() {
     executor
         .observers_mut()
         .match_name_mut::<AccMapObserver<StdMapObserver<'_, u8, false>>>("edges")
-        .map(|observer| observer.read_pid_modules(forkserver_pid.as_raw()));
+        .map(|observer| observer.read_pid_modules(forkserver_pid.as_raw().try_into().unwrap()));
 
     // In case the corpus is empty (on first run), reset
     if state.must_load_initial_inputs() {
