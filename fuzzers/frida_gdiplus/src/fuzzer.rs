@@ -388,6 +388,8 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                 
                 let asan_observer = AsanErrorsObserver::from_static_asan_errors();
 
+                let asan_observer = AsanErrorsObserver::from_static_asan_errors();
+
                 // Feedback to rate the interestingness of an input
                 // This one is composed by two Feedbacks in OR
                 let mut feedback = feedback_or!(

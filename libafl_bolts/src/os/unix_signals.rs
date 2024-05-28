@@ -25,6 +25,9 @@ use nix::errno::Errno;
 /// The special exit code when the target exited through ctrl-c
 pub const CTRL_C_EXIT: i32 = 100;
 
+/// The special exit code when the target exited through ctrl-c
+pub const CTRL_C_EXIT: i32 = 100;
+
 /// ARMv7-specific representation of a saved context
 #[cfg(target_arch = "arm")]
 #[derive(Debug)]
