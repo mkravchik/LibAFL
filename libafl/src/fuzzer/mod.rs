@@ -7,7 +7,7 @@ use libafl_bolts::current_time;
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::{
-    corpus::{Corpus, CorpusId, HasCurrentCorpusIdx, HasTestcase, Testcase},
+    corpus::{Corpus, CorpusId, HasCurrentCorpusId, HasTestcase, Testcase},
     events::{Event, EventConfig, EventFirer, EventProcessor, ProgressReporter},
     executors::{Executor, ExitKind, HasObservers},
     feedbacks::Feedback,
@@ -17,7 +17,10 @@ use crate::{
     schedulers::Scheduler,
     stages::{HasCurrentStage, StagesTuple},
     start_timer,
-    state::{HasCorpus, HasExecutions, HasImported, HasLastReportTime, HasSolutions, UsesState},
+    state::{
+        HasCorpus, HasCurrentTestcase, HasExecutions, HasImported, HasLastReportTime, HasSolutions,
+        UsesState,
+    },
     Error, HasMetadata,
 };
 #[cfg(feature = "introspection")]
@@ -360,7 +363,13 @@ where
     F: Feedback<CS::State>,
     OF: Feedback<CS::State>,
     OT: ObserversTuple<CS::State> + Serialize + DeserializeOwned,
-    CS::State: HasCorpus + HasSolutions + HasExecutions + HasCorpus + HasImported,
+    CS::State: HasCorpus
+        + HasSolutions
+        + HasExecutions
+        + HasCorpus
+        + HasImported
+        + HasCurrentTestcase<<Self::State as UsesInput>::Input>
+        + HasCurrentCorpusId,
 {
     fn execute_no_process<EM>(
         &mut self,
@@ -461,7 +470,7 @@ where
                 let idx = state.corpus_mut().add(testcase)?;
                 self.scheduler_mut().on_add(state, idx)?;
 
-                if send_events {
+                if send_events && manager.should_send() {
                     // TODO set None for fast targets
                     let observers_buf = if manager.configuration() == EventConfig::AlwaysUnique {
                         None
@@ -495,6 +504,9 @@ where
                 // The input is a solution, add it to the respective corpus
                 let mut testcase = Testcase::with_executions(input, executions);
                 testcase.set_parent_id_optional(*state.corpus().current());
+                if let Ok(mut tc) = state.current_testcase_mut() {
+                    tc.found_objective();
+                }
                 self.objective_mut()
                     .append_metadata(state, manager, observers, &mut testcase)?;
                 state.solutions_mut().add(testcase)?;
@@ -541,9 +553,9 @@ where
         let exit_kind = self.execute_input(state, executor, manager, &input)?;
         let observers = executor.observers();
 
-        self.scheduler.on_evaluation(state, &input, observers)?;
+        self.scheduler.on_evaluation(state, &input, &*observers)?;
 
-        self.execute_and_process(state, manager, input, observers, &exit_kind, send_events)
+        self.execute_and_process(state, manager, input, &*observers, &exit_kind, send_events)
     }
 }
 
@@ -595,18 +607,22 @@ where
 
         // Maybe a solution
         #[cfg(not(feature = "introspection"))]
-        let is_solution = self
-            .objective_mut()
-            .is_interesting(state, manager, &input, observers, &exit_kind)?;
+        let is_solution =
+            self.objective_mut()
+                .is_interesting(state, manager, &input, &*observers, &exit_kind)?;
 
         #[cfg(feature = "introspection")]
-        let is_solution = self
-            .objective_mut()
-            .is_interesting_introspection(state, manager, &input, observers, &exit_kind)?;
+        let is_solution = self.objective_mut().is_interesting_introspection(
+            state,
+            manager,
+            &input,
+            &*observers,
+            &exit_kind,
+        )?;
 
         if is_solution {
             self.objective_mut()
-                .append_metadata(state, manager, observers, &mut testcase)?;
+                .append_metadata(state, manager, &*observers, &mut testcase)?;
             let idx = state.solutions_mut().add(testcase)?;
 
             let executions = *state.executions();
@@ -627,25 +643,29 @@ where
         // several is_interesting implementations collect some data about the run, later used in
         // append_metadata; we *must* invoke is_interesting here to collect it
         #[cfg(not(feature = "introspection"))]
-        let _corpus_worthy = self
-            .feedback_mut()
-            .is_interesting(state, manager, &input, observers, &exit_kind)?;
+        let _corpus_worthy =
+            self.feedback_mut()
+                .is_interesting(state, manager, &input, &*observers, &exit_kind)?;
 
         #[cfg(feature = "introspection")]
-        let _corpus_worthy = self
-            .feedback_mut()
-            .is_interesting_introspection(state, manager, &input, observers, &exit_kind)?;
+        let _corpus_worthy = self.feedback_mut().is_interesting_introspection(
+            state,
+            manager,
+            &input,
+            &*observers,
+            &exit_kind,
+        )?;
 
         // Add the input to the main corpus
         self.feedback_mut()
-            .append_metadata(state, manager, observers, &mut testcase)?;
+            .append_metadata(state, manager, &*observers, &mut testcase)?;
         let idx = state.corpus_mut().add(testcase)?;
         self.scheduler_mut().on_add(state, idx)?;
 
         let observers_buf = if manager.configuration() == EventConfig::AlwaysUnique {
             None
         } else {
-            manager.serialize_observers::<OT>(observers)?
+            manager.serialize_observers::<OT>(&*observers)?
         };
         manager.fire(
             state,
@@ -677,7 +697,7 @@ where
         + HasTestcase
         + HasImported
         + HasLastReportTime
-        + HasCurrentCorpusIdx
+        + HasCurrentCorpusId
         + HasCurrentStage,
     ST: StagesTuple<E, EM, CS::State, Self>,
 {
@@ -693,7 +713,7 @@ where
         state.introspection_monitor_mut().start_timer();
 
         // Get the next index from the scheduler
-        let idx = if let Some(idx) = state.current_corpus_idx()? {
+        let idx = if let Some(idx) = state.current_corpus_id()? {
             idx // we are resuming
         } else {
             let idx = self.scheduler.next(state)?;

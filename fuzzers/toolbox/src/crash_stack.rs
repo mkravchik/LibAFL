@@ -1,3 +1,4 @@
+use alloc::borrow::Cow;
 use std::fmt;
 
 use backtrace::Backtrace;
@@ -6,12 +7,13 @@ use libafl::{
     corpus::Testcase,
     events::EventFirer,
     executors::ExitKind,
-    feedbacks::{Feedback, HasObserverName, NewHashFeedback},
+    feedbacks::{Feedback, HasObserverHandle, NewHashFeedback},
     inputs::UsesInput,
     observers::{BacktraceObserver, HarnessType, Observer, ObserverWithHashField, ObserversTuple},
     state::State,
 };
-use libafl_bolts::{impl_serdeany, Error, Named};
+use libafl_bolts::{impl_serdeany, Error, Named, 
+    tuples::{Handle, MatchNameRef}};
 use log::{info, warn};
 use serde::{
     // Serializer,
@@ -278,15 +280,18 @@ pub struct BacktraceObserverWithStack<'a> {
 impl<'a> BacktraceObserverWithStack<'a> {
     /// Creates a new [`BacktraceObserverWithStack`] with the given name.
     #[must_use]
-    pub fn new(
-        observer_name: &str,
+    pub fn new<S>(
+        observer_name: S,
         backtrace_hash: &'a mut Option<u64>,
         harness_type: HarnessType,
         with_symbols: bool,
-    ) -> Self {
+    ) -> Self 
+    where
+        S: Into<Cow<'static, str>>,
+    {
         Self {
             inner: BacktraceObserver::new(
-                observer_name,
+                observer_name.into(),
                 libafl_bolts::ownedref::OwnedRefMut::Ref(backtrace_hash),
                 harness_type.clone(),
             ),
@@ -356,7 +361,7 @@ where
 }
 
 impl<'a> Named for BacktraceObserverWithStack<'a> {
-    fn name(&self) -> &str {
+    fn name(&self) -> &Cow<'static, str> {
         self.inner.name()
     }
 }
@@ -364,12 +369,11 @@ impl<'a> Named for BacktraceObserverWithStack<'a> {
 ///
 /// My custom feedback wrapping NewHashFeedback
 /// I did not find any more elegant way of implementing this
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct NewHashFeedbackWithStack<O, S>(NewHashFeedback<O, S>);
+#[derive(Serialize, Deserialize, Debug)]
+pub struct NewHashFeedbackWithStack<'a, S>(NewHashFeedback<BacktraceObserverWithStack<'a>, S>);
 
-impl<O, S> Feedback<S> for NewHashFeedbackWithStack<O, S>
+impl<'a, S> Feedback<S> for NewHashFeedbackWithStack<'a, S>
 where
-    O: ObserverWithHashField + Named + std::fmt::Debug,
     S: State + HasNamedMetadata + std::fmt::Debug,
 {
     fn init_state(&mut self, state: &mut S) -> Result<(), Error> {
@@ -412,10 +416,14 @@ where
             "{}: append_metadata called!",
             std::process::id().to_string()
         );
+        // let observer = observers
+        //     .match_name::<BacktraceObserverWithStack>(&self.0.observer_name())
+        //     .expect("A NewHashFeedbackWithStack needs a BacktraceObserverWithStack");
         let observer = observers
-            .match_name::<BacktraceObserverWithStack>(&self.0.observer_name())
+            .get(&self.0.observer_handle())
             .expect("A NewHashFeedbackWithStack needs a BacktraceObserverWithStack");
 
+        
         match observer.get_backtrace() {
             // Performance problem here!
             Some(b) => testcase.add_metadata(BacktraceMetadata::new(b.clone())),
@@ -427,27 +435,27 @@ where
     }
 }
 
-impl<O, S> Named for NewHashFeedbackWithStack<O, S> {
+impl<'a, S> Named for NewHashFeedbackWithStack<'a, S> {
     #[inline]
-    fn name(&self) -> &str {
+    fn name(&self) -> &Cow<'static, str> {
         self.0.name()
     }
 }
 
-impl<O, S> HasObserverName for NewHashFeedbackWithStack<O, S> {
+impl<'a, S> HasObserverHandle for NewHashFeedbackWithStack<'a, S> {
+    type Observer = BacktraceObserverWithStack<'a>;
+
     #[inline]
-    fn observer_name(&self) -> &str {
-        self.0.observer_name()
+    fn observer_handle(&self) -> &Handle<BacktraceObserverWithStack<'a>> {
+        self.0.observer_handle()
     }
 }
 
-impl<O, S> NewHashFeedbackWithStack<O, S>
-where
-    O: ObserverWithHashField + Named + std::fmt::Debug,
+impl<'a, S> NewHashFeedbackWithStack<'a, S>
 {
     /// Returns a new [`NewHashFeedbackWithStack`].
     #[must_use]
-    pub fn new(observer: &O) -> Self {
+    pub fn new(observer: &BacktraceObserverWithStack<'a>) -> Self {
         Self(NewHashFeedback::new(observer))
     }
 }

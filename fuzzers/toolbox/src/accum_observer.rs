@@ -1,3 +1,5 @@
+use alloc::borrow::Cow;
+
 #[cfg(unix)]
 use std::fs;
 use std::{
@@ -15,14 +17,14 @@ use libafl::{
     observers::{MapObserver, Observer},
     Error,
 };
-use libafl_bolts::{AsMutSlice, HasLen, Named};
+use libafl_bolts::{AsSliceMut, HasLen, Named};
 use libafl_targets::{
     drcov::{DrCovBasicBlock, DrCovWriterWithCounter},
     sancov_pcguard::sanitizer_cov_pc_table,
 };
 use rangemap::RangeMap;
 use serde::{Deserialize, Serialize};
-
+use std::hash::Hash;
 /// Map observer that accumulates hitcounts and saves them in DrCov format.
 ///
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -47,9 +49,28 @@ where
     target_pid: u32,
 }
 
+impl<M> Hash for AccMapObserver<M>
+where
+    M: Hash + Serialize,
+{
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.base.hash(state);
+        self.save_dr_cov.hash(state);
+        self.acc.hash(state);
+        self.coverage_directory.hash(state);
+        self.cnt.hash(state);
+        self.max_cnt.hash(state);
+        self.stored_cnt.hash(state);
+        self.curr_mod_offset.hash(state);
+        self.curr_mod_addr.hash(state);
+        self.use_pc_table.hash(state);
+        self.target_pid.hash(state);
+    }
+}
+
 impl<S, M> Observer<S> for AccMapObserver<M>
 where
-    M: MapObserver<Entry = u8> + Observer<S> + AsMutSlice<Entry = u8>,
+    M: MapObserver<Entry = u8> + Observer<S> + for<'a> AsSliceMut<'a, Entry = u8>,
     S: UsesInput,
 {
     #[inline]
@@ -72,94 +93,95 @@ where
         if !self.save_dr_cov {
             return Ok(());
         }
-
-        let map = self.base.as_mut_slice();
-        let len = map.len();
-
-        for i in 0..len {
-            self.acc[i] += map[i] as u32;
-        }
-
-        // // Count the hitcounts in the map - DEBUG LOG
-        // let hitcount = self.count_hits();
-        // log::info!("AccMapObserver: post_exec, hitcount: {}", hitcount);
-
-        self.cnt += 1;
-        if self.max_cnt == 0 || self.cnt >= self.max_cnt {
-            // Create basic blocks
-            let mut drcov_basic_blocks: Vec<DrCovBasicBlock> = vec![];
-            let mut bb_counters: Vec<u32> = vec![];
-
-            // access the PC Table
-            // TODO - check if copying it over makes any difference in performance
-            let pc_table = if self.use_pc_table {
-                sanitizer_cov_pc_table()
-            } else {
-                None
-            };
-            if self.use_pc_table {
-                if pc_table.is_none() {
-                    log::warn!("PC Table not found, can't create drcov file");
-                } else {
-                    log::debug!("PC Table: len: {}", pc_table.unwrap().len());
-                }
-            }
+        {
+            let map = self.base.as_slice();
+            let len = map.len();
 
             for i in 0..len {
-                if self.acc[i] == 0 {
-                    continue;
-                }
-                if pc_table.is_none() {
-                    drcov_basic_blocks.push(DrCovBasicBlock {
-                        // I need the address to point to real memory addresses
-                        start: self.curr_mod_addr + i as usize, // this is fixed in the script
-                        end: self.curr_mod_addr + i as usize, // this is fixed in the script start == end indicates to fix the start as well
-                    });
+                self.acc[i] += map[i] as u32;
+            }
+
+            // // Count the hitcounts in the map - DEBUG LOG
+            // let hitcount = self.count_hits();
+            // log::info!("AccMapObserver: post_exec, hitcount: {}", hitcount);
+
+            self.cnt += 1;
+            if self.max_cnt == 0 || self.cnt >= self.max_cnt {
+                // Create basic blocks
+                let mut drcov_basic_blocks: Vec<DrCovBasicBlock> = vec![];
+                let mut bb_counters: Vec<u32> = vec![];
+
+                // access the PC Table
+                // TODO - check if copying it over makes any difference in performance
+                let pc_table = if self.use_pc_table {
+                    sanitizer_cov_pc_table()
                 } else {
-                    // The addresses from PCTable are real memory addresses
-                    // The module is mapped starting from the beginning of the .init section
-                    drcov_basic_blocks.push(DrCovBasicBlock {
-                        start: pc_table.unwrap()[i].addr() + self.curr_mod_offset,
-                        end: pc_table.unwrap()[i].addr() + self.curr_mod_offset + 1, // this is fixed in the script
-                    });
+                    None
+                };
+                if self.use_pc_table {
+                    if pc_table.is_none() {
+                        log::warn!("PC Table not found, can't create drcov file");
+                    } else {
+                        log::debug!("PC Table: len: {}", pc_table.unwrap().len());
+                    }
                 }
 
-                bb_counters.push(self.acc[i]);
+                for i in 0..len {
+                    if self.acc[i] == 0 {
+                        continue;
+                    }
+                    if pc_table.is_none() {
+                        drcov_basic_blocks.push(DrCovBasicBlock {
+                            // I need the address to point to real memory addresses
+                            start: self.curr_mod_addr + i as usize, // this is fixed in the script
+                            end: self.curr_mod_addr + i as usize, // this is fixed in the script start == end indicates to fix the start as well
+                        });
+                    } else {
+                        // The addresses from PCTable are real memory addresses
+                        // The module is mapped starting from the beginning of the .init section
+                        drcov_basic_blocks.push(DrCovBasicBlock {
+                            start: pc_table.unwrap()[i].addr() + self.curr_mod_offset,
+                            end: pc_table.unwrap()[i].addr() + self.curr_mod_offset + 1, // this is fixed in the script
+                        });
+                    }
+
+                    bb_counters.push(self.acc[i]);
+                }
+
+                let mut coverage_hasher = RandomState::with_seeds(0, 0, 0, 0).build_hasher();
+                for bb in &drcov_basic_blocks {
+                    log::debug!("BB: 0x{:x} - 0x{:x}", bb.start, bb.end);
+                    coverage_hasher.write_usize(bb.start);
+                    coverage_hasher.write_usize(bb.end);
+                }
+                let coverage_hash = coverage_hasher.finish();
+                let input_name = input.generate_name(0); // The input index is not known at this point, but is not used in the filename
+                let filename = if self.max_cnt > 0 {
+                    self.coverage_directory.join(format!(
+                        "{}_{coverage_hash:016x}_{}-{}.drcov",
+                        &input_name,
+                        self.stored_cnt,
+                        self.stored_cnt + self.cnt
+                    ))
+                } else {
+                    self.coverage_directory
+                        .join(format!("{}_{coverage_hash:016x}.drcov", &input_name))
+                };
+
+                DrCovWriterWithCounter::new(&self.ranges).write(
+                    filename,
+                    &drcov_basic_blocks,
+                    &bb_counters,
+                )?;
+
+                if self.max_cnt > 0 {
+                    self.stored_cnt += self.cnt;
+                    self.cnt = 0;
+                }
+
+                //reset the accumulated counts
+                self.acc = vec![0; len];
             }
-
-            let mut coverage_hasher = RandomState::with_seeds(0, 0, 0, 0).build_hasher();
-            for bb in &drcov_basic_blocks {
-                log::debug!("BB: 0x{:x} - 0x{:x}", bb.start, bb.end);
-                coverage_hasher.write_usize(bb.start);
-                coverage_hasher.write_usize(bb.end);
-            }
-            let coverage_hash = coverage_hasher.finish();
-            let input_name = input.generate_name(0); // The input index is not known at this point, but is not used in the filename
-            let filename = if self.max_cnt > 0 {
-                self.coverage_directory.join(format!(
-                    "{}_{coverage_hash:016x}_{}-{}.drcov",
-                    &input_name,
-                    self.stored_cnt,
-                    self.stored_cnt + self.cnt
-                ))
-            } else {
-                self.coverage_directory
-                    .join(format!("{}_{coverage_hash:016x}.drcov", &input_name))
-            };
-
-            DrCovWriterWithCounter::new(&self.ranges).write(
-                filename,
-                &drcov_basic_blocks,
-                &bb_counters,
-            )?;
-
-            if self.max_cnt > 0 {
-                self.stored_cnt += self.cnt;
-                self.cnt = 0;
-            }
-
-            //reset the accumulated counts
-            self.acc = vec![0; len];
         }
 
         self.base.post_exec(state, input, exit_kind)
@@ -171,7 +193,7 @@ where
     M: Named + Serialize + serde::de::DeserializeOwned,
 {
     #[inline]
-    fn name(&self) -> &str {
+    fn name(&self) -> &Cow<'static, str> {
         self.base.name()
     }
 }
@@ -221,13 +243,13 @@ where
     }
 
     #[inline]
-    fn get(&self, idx: usize) -> &u8 {
+    fn get(&self, idx: usize) -> u8 {
         self.base.get(idx)
     }
 
     #[inline]
-    fn get_mut(&mut self, idx: usize) -> &mut u8 {
-        self.base.get_mut(idx)
+    fn set(&mut self, idx: usize, val: u8) {
+        self.base.set(idx, val);
     }
 
     /// Count the set bytes in the map
@@ -241,8 +263,8 @@ where
         self.base.reset_map()
     }
 
-    fn hash(&self) -> u64 {
-        self.base.hash()
+    fn hash_simple(&self) -> u64 {
+        self.base.hash_simple()
     }
     fn to_vec(&self) -> Vec<u8> {
         self.base.to_vec()
@@ -444,7 +466,7 @@ fn find_module_params(
 
 impl<M> AccMapObserver<M>
 where
-    M: Serialize + serde::de::DeserializeOwned + AsMutSlice<Entry = u8> + HasLen,
+    M: Serialize + serde::de::DeserializeOwned + for<'a> AsSliceMut<'a, Entry = u8> + HasLen,
 {
     /// Creates a new [`AccMapObserver`]
     pub fn new(base: M) -> Self {
@@ -514,7 +536,7 @@ where
     }
     // /// Sums the hitcounts in the map
     // fn count_hits(&mut self) -> u32 {
-    //     let map = self.base.as_mut_slice();
+    //     let map = self.base.as_slice_mut();
     //     let len = map.len();
 
     //     // TODO - Accumulate the hitcounts in the map

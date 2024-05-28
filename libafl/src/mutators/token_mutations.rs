@@ -1,12 +1,12 @@
 //! Tokens are what AFL calls extras or dictionaries.
 //! They may be inserted as part of mutations during fuzzing.
-use alloc::vec::Vec;
+use alloc::{borrow::Cow, vec::Vec};
 #[cfg(any(target_os = "linux", target_vendor = "apple"))]
 use core::slice::from_raw_parts;
 use core::{
     fmt::Debug,
     mem::size_of,
-    ops::{Add, AddAssign},
+    ops::{Add, AddAssign, Deref},
     slice::Iter,
 };
 #[cfg(feature = "std")]
@@ -23,8 +23,8 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "std")]
 use crate::mutators::str_decode;
 use crate::{
-    corpus::{CorpusId, HasCurrentCorpusIdx},
-    inputs::{HasBytesVec, UsesInput},
+    corpus::{CorpusId, HasCurrentCorpusId},
+    inputs::{HasMutatorBytes, UsesInput},
     mutators::{
         buffer_self_copy, mutations::buffer_copy, MultiMutator, MutationResult, Mutator, Named,
     },
@@ -272,9 +272,9 @@ where
     }
 }
 
-impl AsSlice for Tokens {
-    type Entry = Vec<u8>;
-    fn as_slice(&self) -> &[Vec<u8>] {
+impl Deref for Tokens {
+    type Target = [Vec<u8>];
+    fn deref(&self) -> &[Vec<u8>] {
         self.tokens()
     }
 }
@@ -305,7 +305,7 @@ pub struct TokenInsert;
 impl<I, S> Mutator<I, S> for TokenInsert
 where
     S: HasMetadata + HasRand + HasMaxSize,
-    I: HasBytesVec,
+    I: HasMutatorBytes,
 {
     fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
         let max_size = state.max_size();
@@ -318,10 +318,10 @@ where
             }
             meta.tokens().len()
         };
-        let token_idx = state.rand_mut().below(tokens_len as u64) as usize;
+        let token_idx = state.rand_mut().below(tokens_len);
 
         let size = input.bytes().len();
-        let off = state.rand_mut().below((size + 1) as u64) as usize;
+        let off = state.rand_mut().below(size + 1);
 
         let meta = state.metadata_map().get::<Tokens>().unwrap();
         let token = &meta.tokens()[token_idx];
@@ -335,7 +335,7 @@ where
             }
         }
 
-        input.bytes_mut().resize(size + len, 0);
+        input.resize(size + len, 0);
         unsafe {
             buffer_self_copy(input.bytes_mut(), off, off + len, size - off);
             buffer_copy(input.bytes_mut(), token, 0, off, len);
@@ -346,8 +346,9 @@ where
 }
 
 impl Named for TokenInsert {
-    fn name(&self) -> &str {
-        "TokenInsert"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("TokenInsert");
+        &NAME
     }
 }
 
@@ -367,7 +368,7 @@ pub struct TokenReplace;
 impl<I, S> Mutator<I, S> for TokenReplace
 where
     S: UsesInput + HasMetadata + HasRand + HasMaxSize,
-    I: HasBytesVec,
+    I: HasMutatorBytes,
 {
     fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
         let size = input.bytes().len();
@@ -384,9 +385,9 @@ where
             }
             meta.tokens().len()
         };
-        let token_idx = state.rand_mut().below(tokens_len as u64) as usize;
+        let token_idx = state.rand_mut().below(tokens_len);
 
-        let off = state.rand_mut().below(size as u64) as usize;
+        let off = state.rand_mut().below(size);
 
         let meta = state.metadata_map().get::<Tokens>().unwrap();
         let token = &meta.tokens()[token_idx];
@@ -404,8 +405,9 @@ where
 }
 
 impl Named for TokenReplace {
-    fn name(&self) -> &str {
-        "TokenReplace"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("TokenReplace");
+        &NAME
     }
 }
 
@@ -425,7 +427,7 @@ pub struct I2SRandReplace;
 impl<I, S> Mutator<I, S> for I2SRandReplace
 where
     S: UsesInput + HasMetadata + HasRand + HasMaxSize,
-    I: HasBytesVec,
+    I: HasMutatorBytes,
 {
     #[allow(clippy::too_many_lines)]
     fn mutate(&mut self, state: &mut S, input: &mut I) -> Result<MutationResult, Error> {
@@ -444,9 +446,9 @@ where
             }
             meta.list.len()
         };
-        let idx = state.rand_mut().below(cmps_len as u64) as usize;
+        let idx = state.rand_mut().below(cmps_len);
 
-        let off = state.rand_mut().below(size as u64) as usize;
+        let off = state.rand_mut().below(size);
         let len = input.bytes().len();
         let bytes = input.bytes_mut();
 
@@ -588,8 +590,9 @@ where
 }
 
 impl Named for I2SRandReplace {
-    fn name(&self) -> &str {
-        "I2SRandReplace"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("I2SRandReplace");
+        &NAME
     }
 }
 
@@ -1084,8 +1087,8 @@ impl AFLppRedQueen {
 
 impl<I, S> MultiMutator<I, S> for AFLppRedQueen
 where
-    S: UsesInput + HasMetadata + HasRand + HasMaxSize + HasCorpus + HasCurrentCorpusIdx,
-    I: HasBytesVec + From<Vec<u8>>,
+    S: UsesInput + HasMetadata + HasRand + HasMaxSize + HasCorpus + HasCurrentCorpusId,
+    I: HasMutatorBytes + From<Vec<u8>>,
 {
     #[allow(clippy::needless_range_loop)]
     #[allow(clippy::too_many_lines)]
@@ -1132,10 +1135,10 @@ where
         // println!("orig: {:#?} new: {:#?}", orig_cmpvals, new_cmpvals);
 
         // Compute when mutating it for the 1st time.
-        let current_corpus_idx = state.current_corpus_idx()?.ok_or_else(|| Error::key_not_found("No corpus-idx is currently being fuzzed, but called AFLppRedQueen::multi_mutated()."))?;
-        if self.last_corpus_idx.is_none() || self.last_corpus_idx.unwrap() != current_corpus_idx {
+        let current_corpus_id = state.current_corpus_id()?.ok_or_else(|| Error::key_not_found("No corpus-idx is currently being fuzzed, but called AFLppRedQueen::multi_mutated()."))?;
+        if self.last_corpus_idx.is_none() || self.last_corpus_idx.unwrap() != current_corpus_id {
             self.text_type = check_if_text(orig_bytes, orig_bytes.len());
-            self.last_corpus_idx = Some(current_corpus_idx);
+            self.last_corpus_idx = Some(current_corpus_id);
         }
         // println!("approximate size: {cmp_len} x {input_len}");
         for cmp_idx in 0..cmp_len {
@@ -1673,8 +1676,9 @@ where
 }
 
 impl Named for AFLppRedQueen {
-    fn name(&self) -> &str {
-        "AFLppRedQueen"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("AFLppRedQueen");
+        &NAME
     }
 }
 

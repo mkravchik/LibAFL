@@ -1,3 +1,4 @@
+use alloc::borrow::Cow;
 use std::{
     cell::RefCell, fmt::Display, fs, marker::PhantomPinned, os::raw::c_void, path::Path, pin::Pin,
     rc::Rc,
@@ -9,7 +10,7 @@ use libafl::{
     common::{HasMetadata, HasNamedMetadata},
     corpus::Testcase,
     events::EventFirer,
-    feedbacks::{Feedback, HasObserverName},
+    feedbacks::{Feedback, HasObserverHandle},
     inputs::{HasTargetBytes, Input},
     observers::{MapObserver, Observer, ObserversTuple, StdMapObserver},
     state::State,
@@ -21,11 +22,14 @@ use libafl::{
     // state::HasMetadata,
     // Error,
 };
-use libafl_bolts::{HasLen, Named};
+use libafl_bolts::{HasLen, Named, tuples::{Handle, Handled, MatchNameRef}};
 use libafl_frida::helper::FridaRuntime;
 use rangemap::RangeMap;
 //use std::os::windows::ffi::OsStringExt;
 use serde::{Deserialize, Serialize};
+
+/// The prefix of the metadata names
+pub const REACHABILITYFEEDBACK_PREFIX: &str = "reachability_metadata_";
 
 #[derive(Debug, Deserialize)]
 pub struct Hooks {
@@ -261,6 +265,9 @@ impl FridaRuntime for ReachabilityRuntime {
     fn post_exec<I: Input + HasTargetBytes>(&mut self, _input: &I) -> Result<(), Error> {
         Ok(())
     }
+    fn deinit(&mut self, _gum: &Gum) {
+        //TODO: remove hooks
+    }
 }
 
 // Custom feedback to keep the metadata in the test case
@@ -273,7 +280,7 @@ impl FridaRuntime for ReachabilityRuntime {
 /// The reachability observer
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ReachabilityObserver {
-    name: String,
+    observer_name: Cow<'static, str>,
     base: StdMapObserver<'static, u8, false>,
     hooks: HashMap<usize, String>, // idx -> name
     invocations: Vec<String>,
@@ -282,7 +289,13 @@ pub struct ReachabilityObserver {
 impl ReachabilityObserver {
     /// Creates a new [`ReachabilityObserver`] with the given name.
     #[must_use]
-    pub fn new(name: &str, map: *mut u8, hooks_file: Option<&str>) -> Self {
+    pub fn new<S>(
+        observer_name: S,
+        map: *mut u8, 
+        hooks_file: Option<&str>) -> Self 
+        where
+            S: Into<Cow<'static, str>> + Clone,
+    {
         log::info!("ReachabilityObserver created");
         let hooks = match hooks_file {
             Some(file) => parse_yaml(file).expect("Failed to parse hooks.yaml"),
@@ -299,10 +312,10 @@ impl ReachabilityObserver {
             .enumerate()
             .map(|(idx, hook)| (idx, hook.api_name.clone()))
             .collect();
-
+        
         Self {
-            name: name.to_string(),
-            base: unsafe { StdMapObserver::from_mut_ptr(name, map, MAP_SIZE) },
+            observer_name: observer_name.clone().into(),
+            base: unsafe { StdMapObserver::from_mut_ptr(observer_name, map, MAP_SIZE) },
             hooks: hooks,
             invocations: Vec::new(),
         }
@@ -336,7 +349,7 @@ where
         // keep the names of the hooks in the invocations
         let len = self.base.len();
         for i in 0..len {
-            if *self.base.get(i) != 0 {
+            if self.base.get(i) != 0 {
                 log::info!("Detected hook {} invocation!", i);
                 self.invocations.push(self.hooks.get(&i).unwrap().clone());
             }
@@ -356,8 +369,8 @@ where
 }
 
 impl Named for ReachabilityObserver {
-    fn name(&self) -> &str {
-        &self.name
+    fn name(&self) -> &Cow<'static, str> {
+        &self.observer_name
     }
 }
 
@@ -385,10 +398,8 @@ libafl_bolts::impl_serdeany!(ReachabilityMetadata);
 /// This feedback is used to keep the metadata in the test case
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ReachabilityFeedback {
-    /// Name identifier of this instance
-    name: String,
-    /// Name identifier of the observer
-    observer_name: String,
+    name: Cow<'static, str>,
+    o_ref: Handle<ReachabilityObserver>,
 }
 
 impl<S> Feedback<S> for ReachabilityFeedback
@@ -412,8 +423,12 @@ where
         EM: EventFirer<State = S>,
         OT: ObserversTuple<S>,
     {
+        // let observer = observers
+        //     .match_name::<ReachabilityObserver>(self.observer_name())
+        //     .expect("A ReachabilityFeedback needs a ReachabilityObserver");
+
         let observer = observers
-            .match_name::<ReachabilityObserver>(self.observer_name())
+            .get(&self.o_ref)
             .expect("A ReachabilityFeedback needs a ReachabilityObserver");
 
         let invocations = observer.get_invocations();
@@ -440,9 +455,14 @@ where
             "{}: append_metadata called!",
             std::process::id().to_string()
         );
+        // let observer = observers
+        //     .match_name::<ReachabilityObserver>(self.observer_name())
+        //     .expect("A ReachabilityFeedback needs a ReachabilityObserver");
         let observer = observers
-            .match_name::<ReachabilityObserver>(self.observer_name())
+            .get(&self.o_ref)
             .expect("A ReachabilityFeedback needs a ReachabilityObserver");
+
+
         let invocations = observer.get_invocations();
         if !invocations.is_empty() {
             testcase.add_metadata(ReachabilityMetadata::new(invocations.clone()));
@@ -454,25 +474,27 @@ where
 
 impl Named for ReachabilityFeedback {
     #[inline]
-    fn name(&self) -> &str {
-        self.name.as_str()
+    fn name(&self) -> &Cow<'static, str> {
+        &self.name
     }
 }
 
-impl HasObserverName for ReachabilityFeedback {
+impl HasObserverHandle for ReachabilityFeedback {
+    type Observer = ReachabilityObserver;
     #[inline]
-    fn observer_name(&self) -> &str {
-        self.observer_name.as_str()
+    fn observer_handle(&self) -> &Handle<ReachabilityObserver> {
+        &self.o_ref
     }
 }
 
-impl ReachabilityFeedback {
+impl ReachabilityFeedback
+{
     /// Returns a new [`ReachabilityFeedback`].
     #[must_use]
-    pub fn new(name: String, observer_name: String) -> Self {
-        ReachabilityFeedback {
-            name,
-            observer_name,
+    pub fn new(observer: &ReachabilityObserver) -> Self {
+        Self {
+            name: Cow::from(REACHABILITYFEEDBACK_PREFIX.to_string() + observer.name()),
+            o_ref: observer.handle(),
         }
     }
 }

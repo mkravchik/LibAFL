@@ -1,5 +1,6 @@
 //! Errors that can be caught by the `libafl_frida` address sanitizer.
 use std::{
+    borrow::Cow,
     fmt::Debug,
     io::Write,
     marker::PhantomData,
@@ -21,7 +22,11 @@ use libafl::{
     state::State,
     Error, HasMetadata,
 };
-use libafl_bolts::{ownedref::OwnedPtr, Named, SerdeAny};
+use libafl_bolts::{
+    ownedref::OwnedPtr,
+    tuples::{Handle, Handled, MatchNameRef},
+    Named, SerdeAny,
+};
 use serde::{Deserialize, Serialize};
 use termcolor::{Color, ColorSpec, WriteColor};
 #[cfg(target_arch = "aarch64")]
@@ -86,7 +91,7 @@ pub(crate) enum AsanError {
 }
 
 impl AsanError {
-    fn description(&self) -> &str {
+    pub fn description(&self) -> &str {
         match self {
             AsanError::OobRead(_) => "heap out-of-bounds read",
             AsanError::OobWrite(_) => "heap out-of-bounds write",
@@ -109,7 +114,7 @@ impl AsanError {
 #[derive(Debug, Clone, Serialize, Deserialize, SerdeAny)]
 pub struct AsanErrors {
     continue_on_error: bool,
-    errors: Vec<AsanError>,
+    pub(crate) errors: Vec<AsanError>,
 }
 
 impl AsanErrors {
@@ -587,8 +592,9 @@ where
 
 impl Named for AsanErrorsObserver {
     #[inline]
-    fn name(&self) -> &str {
-        "AsanErrors"
+    fn name(&self) -> &Cow<'static, str> {
+        static ASAN_ERRORS_NAME: Cow<'static, str> = Cow::Borrowed("AsanErrors");
+        &ASAN_ERRORS_NAME
     }
 }
 
@@ -640,6 +646,7 @@ impl AsanErrorsObserver {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AsanErrorsFeedback<S> {
     errors: Option<AsanErrors>,
+    observer_handle: Handle<AsanErrorsObserver>,
     phantom: PhantomData<S>,
 }
 
@@ -662,7 +669,7 @@ where
         OT: ObserversTuple<S>,
     {
         let observer = observers
-            .match_name::<AsanErrorsObserver>("AsanErrors")
+            .get(&self.observer_handle)
             .expect("An AsanErrorsFeedback needs an AsanErrorsObserver");
         let errors = observer.errors();
         if errors.is_empty() {
@@ -698,24 +705,19 @@ where
 
 impl<S> Named for AsanErrorsFeedback<S> {
     #[inline]
-    fn name(&self) -> &str {
-        "AsanErrors"
+    fn name(&self) -> &Cow<'static, str> {
+        self.observer_handle.name()
     }
 }
 
 impl<S> AsanErrorsFeedback<S> {
     /// Create a new `AsanErrorsFeedback`
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(obs: &AsanErrorsObserver) -> Self {
         Self {
             errors: None,
+            observer_handle: obs.handle(),
             phantom: PhantomData,
         }
-    }
-}
-
-impl<S> Default for AsanErrorsFeedback<S> {
-    fn default() -> Self {
-        Self::new()
     }
 }

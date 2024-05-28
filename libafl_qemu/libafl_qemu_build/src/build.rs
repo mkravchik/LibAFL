@@ -2,6 +2,7 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
     process::Command,
+    str::FromStr,
 };
 
 use which::which;
@@ -10,7 +11,7 @@ use crate::cargo_add_rpath;
 
 const QEMU_URL: &str = "https://github.com/AFLplusplus/qemu-libafl-bridge";
 const QEMU_DIRNAME: &str = "qemu-libafl-bridge";
-const QEMU_REVISION: &str = "c9519ee8b6cb1ba54b7df1001f7f39f07218d514";
+const QEMU_REVISION: &str = "9d2197b73bf5e66e709f9f1669467d5c84062da0";
 
 #[allow(clippy::module_name_repetitions)]
 pub struct BuildResult {
@@ -70,28 +71,32 @@ fn configure_qemu(
 ) -> Command {
     let mut cmd = Command::new("./configure");
 
+    let linker_interceptor = qemu_path.join("linker_interceptor.py");
+    let linker_interceptor_plus_plus = qemu_path.join("linker_interceptor++.py");
+
+    println!("cargo:rerun-if-changed={}", linker_interceptor.display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        linker_interceptor_plus_plus.display()
+    );
+
     // Set common options for usermode and systemmode
     cmd.current_dir(qemu_path)
         .env("__LIBAFL_QEMU_CONFIGURE", "")
         .env("__LIBAFL_QEMU_BUILD_OUT", build_dir.join("linkinfo.json"))
         .env("__LIBAFL_QEMU_BUILD_CC", cc_compiler.path())
         .env("__LIBAFL_QEMU_BUILD_CXX", cpp_compiler.path())
-        .arg(&format!(
-            "--cc={}",
-            qemu_path.join("linker_interceptor.py").display()
-        ))
-        .arg(&format!(
-            "--cxx={}",
-            qemu_path.join("linker_interceptor++.py").display()
-        ))
+        .arg(&format!("--cc={}", linker_interceptor.display()))
+        .arg(&format!("--cxx={}", linker_interceptor_plus_plus.display()))
         .arg("--as-shared-lib")
         .arg(&format!("--target-list={cpu_target}-{target_suffix}"))
-        .arg("--disable-bsd-user")
-        .arg("--disable-capstone");
+        // .arg("--disable-capstone")
+        .arg("--disable-bsd-user");
 
-    if cfg!(debug_assertions) {
-        // cmd.arg("--enable-debug");
-        // .arg("--enable-debug-tcg");
+    if cfg!(feature = "paranoid_debug") {
+        cmd.arg("--enable-debug")
+            .arg("--enable-debug-tcg")
+            .arg("--enable-sanitizers");
     }
 
     if is_usermode {
@@ -266,10 +271,14 @@ pub fn build(
     }
 
     let libafl_qemu_dir = env::var_os("LIBAFL_QEMU_DIR").map(|x| x.to_string_lossy().to_string());
+    let libafl_qemu_clone_dir =
+        env::var_os("LIBAFL_QEMU_CLONE_DIR").map(|x| x.to_string_lossy().to_string());
     let libafl_qemu_force_configure = env::var("LIBAFL_QEMU_FORCE_CONFIGURE").is_ok();
     let libafl_qemu_no_build = env::var("LIBAFL_QEMU_NO_BUILD").is_ok();
 
     println!("cargo:rerun-if-env-changed=LIBAFL_QEMU_DIR");
+    println!("cargo:rerun-if-env-changed=LIBAFL_QEMU_CLONE_DIR");
+    println!("cargo:rerun-if-env-changed=LIBAFL_QEMU_FORCE_BUILD");
     println!("cargo:rerun-if-env-changed=LIBAFL_QEMU_FORCE_CONFIGURE");
     println!("cargo:rerun-if-env-changed=LIBAFL_QEMU_NO_BUILD");
 
@@ -286,10 +295,18 @@ pub fn build(
     let cc_compiler = cc::Build::new().cpp(false).get_compiler();
     let cpp_compiler = cc::Build::new().cpp(true).get_compiler();
 
-    let qemu_path = if let Some(qemu_dir) = libafl_qemu_dir.as_ref() {
+    let libafl_qemu_dir = if let Some(qemu_dir) = libafl_qemu_dir.as_ref() {
+        if libafl_qemu_clone_dir.is_some() {
+            println!("cargo:warning=LIBAFL_QEMU_DIR and LIBAFL_QEMU_CLONE_DIR are both set. LIBAFL_QEMU_DIR will be considered in priority");
+        }
+
         Path::new(&qemu_dir).to_path_buf()
     } else {
-        let qemu_path = target_dir.join(QEMU_DIRNAME);
+        let qemu_path = if let Some(clone_dir) = &libafl_qemu_clone_dir {
+            PathBuf::from(clone_dir)
+        } else {
+            target_dir.join(QEMU_DIRNAME)
+        };
 
         let qemu_rev = target_dir.join("QEMU_REVISION");
         if qemu_rev.exists()
@@ -339,8 +356,8 @@ pub fn build(
         qemu_path
     };
 
-    let qemu_build_dir = qemu_path.join("build");
-    let config_signature_path = qemu_build_dir.join("libafl_config");
+    let libafl_qemu_build_dir = libafl_qemu_dir.join("build");
+    let config_signature_path = libafl_qemu_build_dir.join("libafl_config");
 
     let target_suffix = if is_usermode {
         "linux-user".to_string()
@@ -350,12 +367,12 @@ pub fn build(
 
     let (output_lib, output_lib_link) = if is_usermode {
         (
-            qemu_build_dir.join(format!("libqemu-{cpu_target}.so")),
+            libafl_qemu_build_dir.join(format!("libqemu-{cpu_target}.so")),
             format!("qemu-{cpu_target}"),
         )
     } else {
         (
-            qemu_build_dir.join(format!("libqemu-system-{cpu_target}.so")),
+            libafl_qemu_build_dir.join(format!("libqemu-system-{cpu_target}.so")),
             format!("qemu-system-{cpu_target}"),
         )
     };
@@ -365,8 +382,8 @@ pub fn build(
     let mut config_cmd = configure_qemu(
         &cc_compiler,
         &cpp_compiler,
-        &qemu_path,
-        &qemu_build_dir,
+        &libafl_qemu_dir,
+        &libafl_qemu_build_dir,
         is_usermode,
         &cpu_target,
         &target_suffix,
@@ -405,7 +422,7 @@ pub fn build(
 
     // Always build by default, make will detect if it is necessary to rebuild qemu
     if !libafl_qemu_no_build {
-        let mut build_cmd = build_qemu(&cc_compiler, &cpp_compiler, &qemu_build_dir, jobs);
+        let mut build_cmd = build_qemu(&cc_compiler, &cpp_compiler, &libafl_qemu_build_dir, jobs);
 
         assert!(
             build_cmd.status().expect("Invoking Make Failed").success(),
@@ -438,17 +455,31 @@ pub fn build(
     }
     */
 
+    let compile_commands_string = &fs::read_to_string(libafl_qemu_build_dir.join("linkinfo.json"))
+        .expect("Failed to read linkinfo.json");
+
+    let linkinfo = json::parse(compile_commands_string).expect("Failed to parse linkinfo.json");
+
+    for source in linkinfo["sources"].members() {
+        let source_path = PathBuf::from_str(source.as_str().unwrap()).unwrap();
+
+        let source_path = if source_path.is_relative() {
+            libafl_qemu_build_dir.join(source_path)
+        } else {
+            source_path
+        };
+
+        println!("cargo:rerun-if-changed={}", source_path.display());
+    }
+
     if cfg!(feature = "shared") {
-        let qemu_build_dir_str = qemu_build_dir.to_str().expect("Could not convert to str");
+        let qemu_build_dir_str = libafl_qemu_build_dir
+            .to_str()
+            .expect("Could not convert to str");
         println!("cargo:rustc-link-search=native={qemu_build_dir_str}");
         println!("cargo:rustc-link-lib=dylib={output_lib_link}");
         cargo_add_rpath(qemu_build_dir_str);
     } else {
-        let compile_commands_string = &fs::read_to_string(qemu_build_dir.join("linkinfo.json"))
-            .expect("Failed to read linkinfo.json");
-
-        let linkinfo = json::parse(compile_commands_string).expect("Failed to parse linkinfo.json");
-
         let mut cmd = vec![];
         for arg in linkinfo["cmd"].members() {
             cmd.push(
@@ -460,7 +491,7 @@ pub fn build(
         let mut link_command = cpp_compiler.to_command();
 
         link_command
-            .current_dir(&qemu_build_dir)
+            .current_dir(&libafl_qemu_build_dir)
             .arg("-o")
             .arg("libqemu-partially-linked.o")
             .arg("-r")
@@ -468,13 +499,17 @@ pub fn build(
 
         let link_str = format!("{link_command:?}");
 
-        let output = link_command.output().expect("Partial linked failure");
+        let output = match link_command.output() {
+            Ok(output) => output,
+            Err(e) => panic!("Command {link_command:?} failed: {e:?}"),
+        };
 
         if !output.status.success() {
-            fs::write(qemu_build_dir.join("link.command"), link_str).expect("Link command failed.");
-            fs::write(qemu_build_dir.join("link.stdout"), &output.stdout)
+            fs::write(libafl_qemu_build_dir.join("link.command"), link_str)
+                .expect("Link command failed.");
+            fs::write(libafl_qemu_build_dir.join("link.stdout"), &output.stdout)
                 .expect("Link stdout failed.");
-            fs::write(qemu_build_dir.join("link.stderr"), &output.stderr)
+            fs::write(libafl_qemu_build_dir.join("link.stderr"), &output.stderr)
                 .expect("Link stderr failed.");
             panic!("Linking failed.");
         }
@@ -567,7 +602,7 @@ pub fn build(
             .current_dir(out_dir_path)
             .arg("crs")
             .arg("libqemu-partially-linked.a")
-            .arg(qemu_build_dir.join("libqemu-partially-linked.o"))
+            .arg(libafl_qemu_build_dir.join("libqemu-partially-linked.o"))
             .status()
             .expect("Ar creation");
 
@@ -595,13 +630,18 @@ pub fn build(
                 .to_string()
                 .replace(
                     "$ORIGIN",
-                    qemu_build_dir
+                    libafl_qemu_build_dir
                         .as_os_str()
                         .to_str()
                         .expect("Could not convert OsStr to str"),
                 );
             cargo_add_rpath(&val);
         }
+    }
+
+    if cfg!(feature = "paranoid_debug") {
+        println!("cargo:rustc-link-lib=ubsan");
+        println!("cargo:rustc-link-lib=asan");
     }
 
     /*
@@ -623,7 +663,7 @@ pub fn build(
         //}
 
         fs::create_dir_all(target_dir.join("pc-bios")).unwrap();
-        for path in fs::read_dir(qemu_build_dir.join("pc-bios")).unwrap() {
+        for path in fs::read_dir(libafl_qemu_build_dir.join("pc-bios")).unwrap() {
             let path = path.unwrap().path();
             if path.is_file() {
                 if let Some(name) = path.file_name() {
@@ -635,7 +675,7 @@ pub fn build(
     }
 
     BuildResult {
-        qemu_path,
-        build_dir: qemu_build_dir,
+        qemu_path: libafl_qemu_dir,
+        build_dir: libafl_qemu_build_dir,
     }
 }

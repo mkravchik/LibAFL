@@ -1,7 +1,7 @@
 //! Stage to compute/report AFL stats
 
 #[cfg(feature = "std")]
-use alloc::string::ToString;
+use alloc::{borrow::Cow, string::ToString};
 use core::{marker::PhantomData, time::Duration};
 
 use libafl_bolts::current_time;
@@ -9,7 +9,7 @@ use libafl_bolts::current_time;
 use serde_json::json;
 
 use crate::{
-    corpus::{Corpus, HasCurrentCorpusIdx},
+    corpus::{Corpus, HasCurrentCorpusId},
     events::EventFirer,
     schedulers::minimizer::IsFavoredMetadata,
     stages::Stage,
@@ -69,7 +69,7 @@ where
         state: &mut E::State,
         _manager: &mut EM,
     ) -> Result<(), Error> {
-        let Some(corpus_idx) = state.current_corpus_idx()? else {
+        let Some(corpus_idx) = state.current_corpus_id()? else {
             return Err(Error::illegal_state(
                 "state is not currently processing a corpus index",
             ));
@@ -109,9 +109,9 @@ where
                 _manager.fire(
                     state,
                     Event::UpdateUserStats {
-                        name: "AflStats".to_string(),
+                        name: Cow::from("AflStats"),
                         value: UserStats::new(
-                            UserStatsValue::String(json.to_string()),
+                            UserStatsValue::String(Cow::from(json.to_string())),
                             AggregatorOps::None,
                         ),
                         phantom: PhantomData,

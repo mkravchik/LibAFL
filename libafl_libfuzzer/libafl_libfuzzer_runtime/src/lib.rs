@@ -1,12 +1,6 @@
 //! The `LibAFL` `LibFuzzer` runtime, exposing the same functions as the original [`LibFuzzer`](https://llvm.org/docs/LibFuzzer.html).
 
-#![allow(incomplete_features)]
-// For `type_eq`
-#![cfg_attr(unstable_feature, feature(specialization))]
-// For `type_id` and owned things
-#![cfg_attr(unstable_feature, feature(intrinsics))]
-// For `std::simd`
-#![cfg_attr(unstable_feature, feature(portable_simd))]
+#![forbid(unexpected_cfgs)]
 #![warn(clippy::cargo)]
 #![allow(ambiguous_glob_reexports)]
 #![deny(clippy::cargo_common_metadata)]
@@ -24,7 +18,9 @@
     clippy::missing_docs_in_private_items,
     clippy::module_name_repetitions,
     clippy::ptr_cast_constness,
-    clippy::unsafe_derive_deserialize
+    clippy::unsafe_derive_deserialize,
+    clippy::similar_names,
+    clippy::too_many_lines
 )]
 #![cfg_attr(not(test), warn(
     missing_debug_implementations,
@@ -110,11 +106,6 @@ mod harness_wrap {
 }
 
 pub(crate) use harness_wrap::libafl_libfuzzer_test_one_input;
-#[cfg(feature = "mimalloc")]
-use mimalloc::MiMalloc;
-#[global_allocator]
-#[cfg(feature = "mimalloc")]
-static GLOBAL: MiMalloc = MiMalloc;
 
 #[allow(clippy::struct_excessive_bools)]
 struct CustomMutationStatus {
@@ -150,7 +141,6 @@ impl CustomMutationStatus {
 macro_rules! fuzz_with {
     ($options:ident, $harness:ident, $operation:expr, $and_then:expr, $edge_maker:expr) => {{
         use libafl_bolts::{
-                current_nanos,
                 rands::StdRand,
                 tuples::{Merge, tuple_list},
                 AsSlice,
@@ -244,7 +234,7 @@ macro_rules! fuzz_with {
                     map_feedback,
                     feedback_and_fast!(ConstFeedback::new($options.shrink()), shrinking_map_feedback),
                     // Time feedback, this one does not need a feedback state
-                    TimeFeedback::with_observer(&time_observer)
+                    TimeFeedback::new(&time_observer)
                 )
             );
 
@@ -282,7 +272,7 @@ macro_rules! fuzz_with {
             let mut state = state.unwrap_or_else(|| {
                 StdState::new(
                     // RNG
-                    StdRand::with_seed(current_nanos()),
+                    StdRand::new(),
                     // Corpus that will be evolved, we keep it in memory for performance
                     LibfuzzerCorpus::new(corpus_dir.clone(), 4096),
                     // Corpus in which we store solutions (crashes in this example),
