@@ -16,7 +16,7 @@ debug = true
 
 [dependencies]
 libafl = { path = "../../libafl/", features = [ "std", "llmp_compression",
-    "llmp_bind_public", "frida_cli", "errors_backtrace" ] } #,  "llmp_small_maps", "llmp_debug"]}
+    "llmp_bind_public", "frida_cli", "errors_backtrace"] } #,  "llmp_small_maps", "llmp_debug"]}
 libafl_bolts = { path = "../../libafl_bolts/" }
 frida-gum = { version = "0.13.6", features = [ "auto-download", "event-sink", "invocation-listener"] }
 libafl_frida = { path = "../../libafl_frida", features = ["cmplog"] }
@@ -27,6 +27,5 @@ dlmalloc ={version = "0.2.6", features = ["global"]}
 color-backtrace = "0.5"
 env_logger = "0.10.0"
 iced-x86 = { version = "1.20.0", features = ["code_asm"] }
-env_logger = "0.9.0"
 log = "0.4.20"
 toolbox = {path = "../toolbox/"}

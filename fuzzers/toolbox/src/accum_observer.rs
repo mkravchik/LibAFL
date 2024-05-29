@@ -284,11 +284,13 @@ fn get_pid_name(pid: Option<u32>) -> String {
 }
 
 /// A utility function to collect the modules of the current process and their ranges in memory
+#[allow(unused_mut)]
 pub fn collect_modules(pid: Option<u32>) -> Result<RangeMap<usize, (u16, String)>, ()> {
     let mut ranges = RangeMap::new();
     #[cfg(windows)]
     {
         // Windows-specific implementation here
+        let _pid = pid;
     }
 
     #[cfg(unix)]
