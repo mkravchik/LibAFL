@@ -358,15 +358,18 @@ pub mod windows_exception_handler {
                 {
                     use std::{
                         fs::File,
-                        os::windows::{io::AsRawHandle, raw::HANDLE},
+                        os::windows::io::AsRawHandle,
                         ptr::null_mut,
                     };
 
                     use winapi::{
                         shared::minwindef::{BOOL, DWORD, FALSE},
-                        um::processthreadsapi::{
-                            GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId,
-                        },
+                        um::{
+                            winnt::HANDLE,
+                            processthreadsapi::{
+                                GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId,
+                            },
+                        }
                     };
 
                     const MINI_DUMP_FULL_MEMORY_INFO: i32 = 0x00000800;

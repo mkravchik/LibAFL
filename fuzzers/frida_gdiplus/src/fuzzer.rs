@@ -425,8 +425,7 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                     // TODO - check whether I need to track novelties as well
                     // MaxMapFeedback::tracking(&reachability_observer, true, true),
                     ReachabilityFeedback::new(
-                        "api_hooks_feedback".to_string(),
-                        reachability_observer_meta.name().to_string()
+                        &reachability_observer_meta
                     ),
                     NewHashFeedbackWithStack::new(&bt_observer),
                     CrashFeedback::new(),
