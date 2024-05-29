@@ -32,6 +32,7 @@
     clippy::missing_panics_doc,
     clippy::pub_underscore_fields
 )]
+#![forbid(unexpected_cfgs)]
 
 pub mod filter;
 pub mod tracing;
@@ -158,6 +159,18 @@ macro_rules! export_rust_runtime_fn {
                     rt.push_path_constraint(constraint, taken, site_id);
                 })
             }
+        }
+    };
+    // special case for build_integer_from_buffer cuz the next one just doesn't work!!!!!!!
+    (pub fn build_integer_from_buffer(
+        buffer: *mut ::std::os::raw::c_void,
+        num_bits: ::std::os::raw::c_uint,) -> RSymExpr,$c_name:ident; $rt_cb:path) => {
+        #[allow(clippy::missing_safety_doc)]
+        #[no_mangle]
+        pub unsafe extern "C" fn _rsym_build_integer_from_buffer(buffer: *mut ::std::os::raw::c_void, num_bits: ::std::os::raw::c_uint) {
+            $rt_cb(|rt| {
+                rt.build_integer_from_buffer(buffer, num_bits);
+            })
         }
     };
     // all other methods are handled by this

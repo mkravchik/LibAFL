@@ -41,6 +41,10 @@ pub enum LLVMPasses {
     CmpLogInstructions,
     /// Instrument caller for sancov coverage
     Ctx,
+    /// Function logging
+    FunctionLogging,
+    /// Profiling
+    Profiling,
     /// Data dependency instrumentation
     DDG,
 }
@@ -65,6 +69,12 @@ impl LLVMPasses {
                 .join(format!("cmplog-instructions-pass.{}", dll_extension())),
             LLVMPasses::Ctx => {
                 PathBuf::from(env!("OUT_DIR")).join(format!("ctx-pass.{}", dll_extension()))
+            }
+            LLVMPasses::FunctionLogging => {
+                PathBuf::from(env!("OUT_DIR")).join(format!("function-logging.{}", dll_extension()))
+            }
+            LLVMPasses::Profiling => {
+                PathBuf::from(env!("OUT_DIR")).join(format!("profiling.{}", dll_extension()))
             }
             LLVMPasses::DDG => {
                 PathBuf::from(env!("OUT_DIR")).join(format!("ddg-instr.{}", dll_extension()))
@@ -278,7 +288,7 @@ impl ToolWrapper for ClangWrapper {
         if linking {
             new_args.push("-lrt".into());
         }
-        // MacOS has odd linker behavior sometimes
+        // `MacOS` has odd linker behavior sometimes
         #[cfg(target_vendor = "apple")]
         if linking || shared {
             new_args.push("-undefined".into());

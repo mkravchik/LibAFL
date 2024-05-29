@@ -15,6 +15,7 @@ fn enable_nightly() {}
 
 #[allow(clippy::too_many_lines)]
 fn main() {
+    println!("cargo:rustc-check-cfg=cfg(nightly)");
     enable_nightly();
     let out_dir = env::var_os("OUT_DIR").unwrap();
     let out_dir = out_dir.to_string_lossy().to_string();
@@ -29,7 +30,7 @@ fn main() {
         .map_or(Ok(TWO_MB), str::parse)
         .expect("Could not parse LIBAFL_EDGES_MAP_SIZE_MAX");
     let edges_map_size_in_use: usize = option_env!("LIBAFL_EDGES_MAP_SIZE_IN_USE")
-        .map_or(Ok(TWO_MB), str::parse)
+        .map_or(Ok(SIXTY_FIVE_KB), str::parse)
         .expect("Could not parse LIBAFL_EDGES_MAP_SIZE_IN_USE");
     let cmp_map_size: usize = option_env!("LIBAFL_CMP_MAP_SIZE")
         .map_or(Ok(SIXTY_FIVE_KB), str::parse)
@@ -199,10 +200,12 @@ fn main() {
         }
     }
 
+    #[cfg(any(feature = "forkserver", feature = "windows_asan"))]
+    let target_family = std::env::var("CARGO_CFG_TARGET_FAMILY").unwrap();
+
     #[cfg(feature = "forkserver")]
     {
-        #[cfg(unix)]
-        {
+        if target_family == "unix" {
             println!("cargo:rerun-if-changed=src/forkserver.c");
 
             cc::Build::new()
@@ -211,8 +214,8 @@ fn main() {
         }
     }
 
-    #[cfg(all(feature = "windows_asan", windows))]
-    {
+    #[cfg(feature = "windows_asan")]
+    if target_family == "windows" {
         println!("cargo:rerun-if-changed=src/windows_asan.c");
 
         cc::Build::new()

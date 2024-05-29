@@ -8,7 +8,7 @@ use core::{
     time::Duration,
 };
 
-use libafl_bolts::tuples::tuple_list;
+use libafl_bolts::tuples::{tuple_list, RefIndexable};
 
 use crate::{
     events::{EventFirer, EventRestarter},
@@ -142,12 +142,12 @@ where
     S: State,
 {
     #[inline]
-    fn observers(&self) -> &OT {
+    fn observers(&self) -> RefIndexable<&Self::Observers, Self::Observers> {
         self.inner.observers()
     }
 
     #[inline]
-    fn observers_mut(&mut self) -> &mut OT {
+    fn observers_mut(&mut self) -> RefIndexable<&mut Self::Observers, Self::Observers> {
         self.inner.observers_mut()
     }
 }
@@ -227,6 +227,7 @@ where
     /// * `user_hooks` - the hooks run before and after the harness's execution
     /// * `harness_fn` - the harness, executing the function
     /// * `observers` - the observers observing the target during execution
+    ///
     /// This may return an error on unix, if signal handler setup fails
     pub fn with_timeout<EM, OF, Z>(
         harness_fn: &'a mut H,
@@ -354,6 +355,7 @@ where
     /// * `user_hooks` - the hooks run before and after the harness's execution
     /// * `harness_fn` - the harness, executing the function
     /// * `observers` - the observers observing the target during execution
+    ///
     /// This may return an error on unix, if signal handler setup fails
     #[allow(clippy::too_many_arguments)]
     pub fn with_timeout_generic<EM, OF, Z>(

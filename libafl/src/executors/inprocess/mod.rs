@@ -16,7 +16,7 @@ use core::{
     time::Duration,
 };
 
-use libafl_bolts::tuples::tuple_list;
+use libafl_bolts::tuples::{tuple_list, RefIndexable};
 
 #[cfg(any(unix, feature = "std"))]
 use crate::executors::hooks::inprocess::GLOBAL_STATE;
@@ -32,7 +32,7 @@ use crate::{
     fuzzer::HasObjective,
     inputs::UsesInput,
     observers::{ObserversTuple, UsesObservers},
-    state::{HasCorpus, HasExecutions, HasSolutions, State, UsesState},
+    state::{HasCorpus, HasCurrentTestcase, HasExecutions, HasSolutions, State, UsesState},
     Error, HasMetadata,
 };
 
@@ -134,7 +134,7 @@ where
         }
         self.inner.hooks.pre_exec_all(state, input);
 
-        let ret = (self.harness_fn.borrow_mut())(input);
+        let ret = self.harness_fn.borrow_mut()(input);
 
         self.inner.hooks.post_exec_all(state, input);
         self.inner.leave_target(fuzzer, state, mgr, input);
@@ -151,12 +151,12 @@ where
     S: State,
 {
     #[inline]
-    fn observers(&self) -> &OT {
+    fn observers(&self) -> RefIndexable<&Self::Observers, Self::Observers> {
         self.inner.observers()
     }
 
     #[inline]
-    fn observers_mut(&mut self) -> &mut OT {
+    fn observers_mut(&mut self) -> RefIndexable<&mut Self::Observers, Self::Observers> {
         self.inner.observers_mut()
     }
 }
@@ -232,6 +232,7 @@ where
     /// * `user_hooks` - the hooks run before and after the harness's execution
     /// * `harness_fn` - the harness, executing the function
     /// * `observers` - the observers observing the target during execution
+    ///
     /// This may return an error on unix, if signal handler setup fails
     pub fn with_timeout<EM, OF, Z>(
         harness_fn: &'a mut H,
@@ -329,12 +330,13 @@ where
         })
     }
 
-    /// Create a new in mem executor.
+    /// Create a new [`InProcessExecutor`].
     /// Caution: crash and restart in one of them will lead to odd behavior if multiple are used,
     /// depending on different corpus or state.
     /// * `user_hooks` - the hooks run before and after the harness's execution
     /// * `harness_fn` - the harness, executing the function
     /// * `observers` - the observers observing the target during execution
+    ///
     /// This may return an error on unix, if signal handler setup fails
     pub fn with_timeout_generic<EM, OF, Z>(
         user_hooks: HT,
@@ -438,7 +440,7 @@ pub fn run_observers_and_save_state<E, EM, OF, Z>(
     E::State: HasExecutions + HasSolutions + HasCorpus,
     Z: HasObjective<Objective = OF, State = E::State>,
 {
-    let observers = executor.observers_mut();
+    let mut observers = executor.observers_mut();
 
     observers
         .post_exec_all(state, input, &exitkind)
@@ -446,7 +448,7 @@ pub fn run_observers_and_save_state<E, EM, OF, Z>(
 
     let interesting = fuzzer
         .objective_mut()
-        .is_interesting(state, event_mgr, input, observers, &exitkind)
+        .is_interesting(state, event_mgr, input, &*observers, &exitkind)
         .expect("In run_observers_and_save_state objective failure.");
 
     if interesting {
@@ -454,9 +456,14 @@ pub fn run_observers_and_save_state<E, EM, OF, Z>(
         let mut new_testcase = Testcase::with_executions(input.clone(), executions);
         new_testcase.add_metadata(exitkind);
         new_testcase.set_parent_id_optional(*state.corpus().current());
+
+        if let Ok(mut tc) = state.current_testcase_mut() {
+            tc.found_objective();
+        }
+
         fuzzer
             .objective_mut()
-            .append_metadata(state, event_mgr, observers, &mut new_testcase)
+            .append_metadata(state, event_mgr, &*observers, &mut new_testcase)
             .expect("Failed adding metadata");
         state
             .solutions_mut()

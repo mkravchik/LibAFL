@@ -10,6 +10,8 @@
 use alloc::{boxed::Box, string::String, vec::Vec};
 use core::{marker::PhantomData, num::NonZeroUsize, time::Duration};
 
+#[cfg(feature = "adaptive_serialization")]
+use libafl_bolts::tuples::{Handle, Handled};
 #[cfg(feature = "llmp_compression")]
 use libafl_bolts::{
     compress::GzipCompressor,
@@ -17,13 +19,16 @@ use libafl_bolts::{
 };
 use libafl_bolts::{
     llmp::{self, LlmpBroker, LlmpClient, LlmpClientDescription, Tag},
-    shmem::ShMemProvider,
+    shmem::{NopShMemProvider, ShMemProvider},
     ClientId,
 };
 use serde::{Deserialize, Serialize};
 
+use super::NopEventManager;
 #[cfg(feature = "llmp_compression")]
 use crate::events::llmp::COMPRESS_THRESHOLD;
+#[cfg(feature = "adaptive_serialization")]
+use crate::observers::TimeObserver;
 #[cfg(feature = "scalability_introspection")]
 use crate::state::HasScalabilityMonitor;
 use crate::{
@@ -34,9 +39,9 @@ use crate::{
     },
     executors::{Executor, HasObservers},
     fuzzer::{EvaluatorObservers, ExecutionProcessor},
-    inputs::{Input, UsesInput},
+    inputs::{Input, NopInput, UsesInput},
     observers::ObserversTuple,
-    state::{HasExecutions, HasLastReportTime, UsesState},
+    state::{HasExecutions, HasLastReportTime, NopState, UsesState},
     Error, HasMetadata,
 };
 
@@ -82,7 +87,7 @@ where
         Ok(Self {
             llmp,
             #[cfg(feature = "llmp_compression")]
-            compressor: GzipCompressor::new(COMPRESS_THRESHOLD),
+            compressor: GzipCompressor::with_threshold(COMPRESS_THRESHOLD),
             phantom: PhantomData,
         })
     }
@@ -96,7 +101,7 @@ where
             // TODO switch to false after solving the bug
             llmp: LlmpBroker::with_keep_pages_attach_to_tcp(shmem_provider, port, true)?,
             #[cfg(feature = "llmp_compression")]
-            compressor: GzipCompressor::new(COMPRESS_THRESHOLD),
+            compressor: GzipCompressor::with_threshold(COMPRESS_THRESHOLD),
             phantom: PhantomData,
         })
     }
@@ -221,9 +226,228 @@ where
     client: LlmpClient<SP>,
     #[cfg(feature = "llmp_compression")]
     compressor: GzipCompressor,
+    #[cfg(feature = "adaptive_serialization")]
+    time_ref: Handle<TimeObserver>,
     is_main: bool,
 }
 
+impl CentralizedEventManager<NopEventManager<NopState<NopInput>>, NopShMemProvider> {
+    /// Creates a builder for [`CentralizedEventManager`]
+    #[must_use]
+    pub fn builder() -> CentralizedEventManagerBuilder {
+        CentralizedEventManagerBuilder::new()
+    }
+}
+
+/// The builder or `CentralizedEventManager`
+#[derive(Debug)]
+pub struct CentralizedEventManagerBuilder {
+    is_main: bool,
+}
+
+impl Default for CentralizedEventManagerBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CentralizedEventManagerBuilder {
+    /// The constructor
+    #[must_use]
+    pub fn new() -> Self {
+        Self { is_main: false }
+    }
+
+    /// Make this a main evaluator node
+    #[must_use]
+    pub fn is_main(self, is_main: bool) -> Self {
+        Self { is_main }
+    }
+
+    /// Creates a new [`CentralizedEventManager`].
+    #[cfg(not(feature = "adaptive_serialization"))]
+    pub fn build_from_client<EM, SP>(
+        self,
+        inner: EM,
+        client: LlmpClient<SP>,
+    ) -> Result<CentralizedEventManager<EM, SP>, Error>
+    where
+        SP: ShMemProvider,
+        EM: UsesState,
+    {
+        Ok(CentralizedEventManager {
+            inner,
+            client,
+            #[cfg(feature = "llmp_compression")]
+            compressor: GzipCompressor::with_threshold(COMPRESS_THRESHOLD),
+            is_main: self.is_main,
+        })
+    }
+
+    /// Creates a new [`CentralizedEventManager`].
+    #[cfg(feature = "adaptive_serialization")]
+    pub fn build_from_client<EM, SP>(
+        self,
+        inner: EM,
+        client: LlmpClient<SP>,
+        time_obs: &TimeObserver,
+    ) -> Result<CentralizedEventManager<EM, SP>, Error>
+    where
+        SP: ShMemProvider,
+        EM: UsesState,
+    {
+        Ok(CentralizedEventManager {
+            inner,
+            client,
+            #[cfg(feature = "llmp_compression")]
+            compressor: GzipCompressor::with_threshold(COMPRESS_THRESHOLD),
+            time_ref: time_obs.handle(),
+            is_main: self.is_main,
+        })
+    }
+
+    /// Create a centralized event manager on a port
+    ///
+    /// If the port is not yet bound, it will act as a broker; otherwise, it
+    /// will act as a client.
+    #[cfg(all(feature = "std", not(feature = "adaptive_serialization")))]
+    pub fn build_on_port<EM, SP>(
+        self,
+        inner: EM,
+        shmem_provider: SP,
+        port: u16,
+    ) -> Result<CentralizedEventManager<EM, SP>, Error>
+    where
+        SP: ShMemProvider,
+        EM: UsesState,
+    {
+        let client = LlmpClient::create_attach_to_tcp(shmem_provider, port)?;
+        Ok(CentralizedEventManager {
+            inner,
+            client,
+            #[cfg(feature = "llmp_compression")]
+            compressor: GzipCompressor::with_threshold(COMPRESS_THRESHOLD),
+            is_main: self.is_main,
+        })
+    }
+
+    /// Create a centralized event manager on a port
+    ///
+    /// If the port is not yet bound, it will act as a broker; otherwise, it
+    /// will act as a client.
+    #[cfg(all(feature = "std", feature = "adaptive_serialization"))]
+    pub fn build_on_port<EM, SP>(
+        self,
+        inner: EM,
+        shmem_provider: SP,
+        port: u16,
+        time_obs: &TimeObserver,
+    ) -> Result<CentralizedEventManager<EM, SP>, Error>
+    where
+        SP: ShMemProvider,
+        EM: UsesState,
+    {
+        let client = LlmpClient::create_attach_to_tcp(shmem_provider, port)?;
+        Ok(CentralizedEventManager {
+            inner,
+            client,
+            #[cfg(feature = "llmp_compression")]
+            compressor: GzipCompressor::with_threshold(COMPRESS_THRESHOLD),
+            time_ref: time_obs.handle(),
+            is_main: self.is_main,
+        })
+    }
+
+    /// If a client respawns, it may reuse the existing connection, previously
+    /// stored by [`LlmpClient::to_env()`].
+    #[cfg(all(feature = "std", not(feature = "adaptive_serialization")))]
+    pub fn build_existing_client_from_env<EM, SP>(
+        self,
+        inner: EM,
+        shmem_provider: SP,
+        env_name: &str,
+    ) -> Result<CentralizedEventManager<EM, SP>, Error>
+    where
+        EM: UsesState,
+        SP: ShMemProvider,
+    {
+        Ok(CentralizedEventManager {
+            inner,
+            client: LlmpClient::on_existing_from_env(shmem_provider, env_name)?,
+            #[cfg(feature = "llmp_compression")]
+            compressor: GzipCompressor::with_threshold(COMPRESS_THRESHOLD),
+            is_main: self.is_main,
+        })
+    }
+
+    /// If a client respawns, it may reuse the existing connection, previously
+    /// stored by [`LlmpClient::to_env()`].
+    #[cfg(all(feature = "std", feature = "adaptive_serialization"))]
+    pub fn build_existing_client_from_env<EM, SP>(
+        self,
+        inner: EM,
+        shmem_provider: SP,
+        env_name: &str,
+        time_obs: &TimeObserver,
+    ) -> Result<CentralizedEventManager<EM, SP>, Error>
+    where
+        EM: UsesState,
+        SP: ShMemProvider,
+    {
+        Ok(CentralizedEventManager {
+            inner,
+            client: LlmpClient::on_existing_from_env(shmem_provider, env_name)?,
+            #[cfg(feature = "llmp_compression")]
+            compressor: GzipCompressor::with_threshold(COMPRESS_THRESHOLD),
+            time_ref: time_obs.handle(),
+            is_main: self.is_main,
+        })
+    }
+
+    /// Create an existing client from description
+    #[cfg(all(feature = "std", not(feature = "adaptive_serialization")))]
+    pub fn existing_client_from_description<EM, SP>(
+        self,
+        inner: EM,
+        shmem_provider: SP,
+        description: &LlmpClientDescription,
+    ) -> Result<CentralizedEventManager<EM, SP>, Error>
+    where
+        EM: UsesState,
+        SP: ShMemProvider,
+    {
+        Ok(CentralizedEventManager {
+            inner,
+            client: LlmpClient::existing_client_from_description(shmem_provider, description)?,
+            #[cfg(feature = "llmp_compression")]
+            compressor: GzipCompressor::with_threshold(COMPRESS_THRESHOLD),
+            is_main: self.is_main,
+        })
+    }
+
+    /// Create an existing client from description
+    #[cfg(all(feature = "std", feature = "adaptive_serialization"))]
+    pub fn existing_client_from_description<EM, SP>(
+        self,
+        inner: EM,
+        shmem_provider: SP,
+        description: &LlmpClientDescription,
+        time_obs: &TimeObserver,
+    ) -> Result<CentralizedEventManager<EM, SP>, Error>
+    where
+        EM: UsesState,
+        SP: ShMemProvider,
+    {
+        Ok(CentralizedEventManager {
+            inner,
+            client: LlmpClient::existing_client_from_description(shmem_provider, description)?,
+            #[cfg(feature = "llmp_compression")]
+            compressor: GzipCompressor::with_threshold(COMPRESS_THRESHOLD),
+            time_ref: time_obs.handle(),
+            is_main: self.is_main,
+        })
+    }
+}
 impl<EM, SP> UsesState for CentralizedEventManager<EM, SP>
 where
     EM: UsesState,
@@ -263,6 +487,10 @@ where
     fn should_serialize_cnt_mut(&mut self) -> &mut usize {
         self.inner.should_serialize_cnt_mut()
     }
+
+    fn time_ref(&self) -> &Handle<TimeObserver> {
+        &self.time_ref
+    }
 }
 
 #[cfg(not(feature = "adaptive_serialization"))]
@@ -275,9 +503,13 @@ where
 
 impl<EM, SP> EventFirer for CentralizedEventManager<EM, SP>
 where
-    EM: AdaptiveSerializer + EventFirer + HasEventManagerId + AdaptiveSerializer,
+    EM: AdaptiveSerializer + EventFirer + HasEventManagerId,
     SP: ShMemProvider + 'static,
 {
+    fn should_send(&self) -> bool {
+        self.inner.should_send()
+    }
+
     fn fire(
         &mut self,
         state: &mut Self::State,
@@ -458,74 +690,13 @@ where
     EM: UsesState,
     SP: ShMemProvider + 'static,
 {
-    /// Creates a new [`CentralizedEventManager`].
-    pub fn new(inner: EM, client: LlmpClient<SP>, is_main: bool) -> Result<Self, Error> {
-        Ok(Self {
-            inner,
-            client,
-            #[cfg(feature = "llmp_compression")]
-            compressor: GzipCompressor::new(COMPRESS_THRESHOLD),
-            is_main,
-        })
-    }
-
-    /// Create a centralized event manager on a port
-    ///
-    /// If the port is not yet bound, it will act as a broker; otherwise, it
-    /// will act as a client.
-    #[cfg(feature = "std")]
-    pub fn on_port(inner: EM, shmem_provider: SP, port: u16, is_main: bool) -> Result<Self, Error> {
-        let client = LlmpClient::create_attach_to_tcp(shmem_provider, port)?;
-        Ok(Self {
-            inner,
-            client,
-            #[cfg(feature = "llmp_compression")]
-            compressor: GzipCompressor::new(COMPRESS_THRESHOLD),
-            is_main,
-        })
-    }
-
-    /// If a client respawns, it may reuse the existing connection, previously
-    /// stored by [`LlmpClient::to_env()`].
-    #[cfg(feature = "std")]
-    pub fn existing_client_from_env(
-        inner: EM,
-        shmem_provider: SP,
-        env_name: &str,
-        is_main: bool,
-    ) -> Result<Self, Error> {
-        Ok(Self {
-            inner,
-            client: LlmpClient::on_existing_from_env(shmem_provider, env_name)?,
-            #[cfg(feature = "llmp_compression")]
-            compressor: GzipCompressor::new(COMPRESS_THRESHOLD),
-            is_main,
-        })
-    }
-
     /// Describe the client event manager's LLMP parts in a restorable fashion
     pub fn describe(&self) -> Result<LlmpClientDescription, Error> {
         self.client.describe()
     }
 
-    /// Create an existing client from description
-    pub fn existing_client_from_description(
-        inner: EM,
-        shmem_provider: SP,
-        description: &LlmpClientDescription,
-        is_main: bool,
-    ) -> Result<Self, Error> {
-        Ok(Self {
-            inner,
-            client: LlmpClient::existing_client_from_description(shmem_provider, description)?,
-            #[cfg(feature = "llmp_compression")]
-            compressor: GzipCompressor::new(COMPRESS_THRESHOLD),
-            is_main,
-        })
-    }
-
     /// Write the config for a client [`EventManager`] to env vars, a new
-    /// client can reattach using [`CentralizedEventManager::existing_client_from_env()`].
+    /// client can reattach using [`CentralizedEventManagerBuilder::build_existing_client_from_env()`].
     #[cfg(feature = "std")]
     pub fn to_env(&self, env_name: &str) {
         self.client.to_env(env_name).unwrap();
@@ -550,7 +721,7 @@ where
         let serialized = postcard::to_allocvec(event)?;
         let flags = LLMP_FLAG_INITIALIZED;
 
-        match self.compressor.compress(&serialized)? {
+        match self.compressor.maybe_compress(&serialized) {
             Some(comp_buf) => {
                 self.client.send_buf_with_flags(
                     _LLMP_TAG_TO_MAIN,

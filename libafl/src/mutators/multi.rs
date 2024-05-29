@@ -7,7 +7,7 @@ use libafl_bolts::{rands::Rand, Error};
 use crate::{
     corpus::{Corpus, CorpusId},
     impl_default_multipart,
-    inputs::{multi::MultipartInput, HasBytesVec, Input},
+    inputs::{multi::MultipartInput, HasMutatorBytes, Input},
     mutators::{
         mutations::{
             rand_range, BitFlipMutator, ByteAddMutator, ByteDecMutator, ByteFlipMutator,
@@ -44,7 +44,7 @@ where
         if input.parts().is_empty() {
             Ok(MutationResult::Skipped)
         } else {
-            let selected = state.rand_mut().below(input.parts().len() as u64) as usize;
+            let selected = state.rand_mut().below(input.parts().len());
             let mutated = input.part_mut(selected).unwrap();
             self.mutate(state, mutated)
         }
@@ -117,7 +117,7 @@ impl_default_multipart!(
 impl<I, S> Mutator<MultipartInput<I>, S> for CrossoverInsertMutator<I>
 where
     S: HasCorpus<Input = MultipartInput<I>> + HasMaxSize + HasRand,
-    I: Input + HasBytesVec,
+    I: Input + HasMutatorBytes,
 {
     fn mutate(
         &mut self,
@@ -153,7 +153,7 @@ where
                     .map(|(idx, part)| (idx, part.bytes().len()));
 
                 if let Some((part_idx, size)) = maybe_size {
-                    let target = state.rand_mut().below(size as u64) as usize;
+                    let target = state.rand_mut().below(size);
                     let range = rand_range(state, other_size, min(other_size, size - target));
 
                     let [part, chosen] = match part_idx.cmp(&choice) {
@@ -195,7 +195,7 @@ where
             drop(other_testcase);
             let size = part.bytes().len();
 
-            let target = state.rand_mut().below(size as u64) as usize;
+            let target = state.rand_mut().below(size);
             let range = rand_range(state, other_size, min(other_size, size - target));
 
             let other_testcase = state.corpus().get(idx)?.borrow_mut();
@@ -221,7 +221,7 @@ where
 impl<I, S> Mutator<MultipartInput<I>, S> for CrossoverReplaceMutator<I>
 where
     S: HasCorpus<Input = MultipartInput<I>> + HasMaxSize + HasRand,
-    I: Input + HasBytesVec,
+    I: Input + HasMutatorBytes,
 {
     fn mutate(
         &mut self,
@@ -257,7 +257,7 @@ where
                     .map(|(idx, part)| (idx, part.bytes().len()));
 
                 if let Some((part_idx, size)) = maybe_size {
-                    let target = state.rand_mut().below(size as u64) as usize;
+                    let target = state.rand_mut().below(size);
                     let range = rand_range(state, other_size, min(other_size, size - target));
 
                     let [part, chosen] = match part_idx.cmp(&choice) {
@@ -299,7 +299,7 @@ where
             drop(other_testcase);
             let size = part.bytes().len();
 
-            let target = state.rand_mut().below(size as u64) as usize;
+            let target = state.rand_mut().below(size);
             let range = rand_range(state, other_size, min(other_size, size - target));
 
             let other_testcase = state.corpus().get(idx)?.borrow_mut();

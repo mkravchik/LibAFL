@@ -19,7 +19,6 @@ use libafl::{
 };
 use libafl_bolts::{
     core_affinity::Cores,
-    current_nanos,
     os::unix_signals::Signal,
     rands::StdRand,
     shmem::{ShMemProvider, StdShMemProvider},
@@ -137,7 +136,7 @@ pub fn fuzz() {
             "Mapping: 0x{:016x}-0x{:016x}, {}",
             m.start(),
             m.end(),
-            m.path().unwrap_or("<EMPTY>")
+            m.path().unwrap_or(&"<EMPTY>".to_string())
         );
     }
 
@@ -216,7 +215,7 @@ pub fn fuzz() {
 
             let mut state = state.unwrap_or_else(|| {
                 StdState::new(
-                    StdRand::with_seed(current_nanos()),
+                    StdRand::new(),
                     NopCorpus::new(),
                     NopCorpus::new(),
                     &mut feedback,
@@ -255,7 +254,7 @@ pub fn fuzz() {
                 tuple_list!(QemuDrCovHelper::new(
                     QemuInstrumentationAddressRangeFilter::None,
                     rangemap,
-                    PathBuf::from(coverage),
+                    coverage,
                     false,
                 )),
             );

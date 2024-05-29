@@ -4,41 +4,27 @@
 
 // TODO: make S of Feedback<S> an associated type when specialisation + AT is stable
 
-pub mod map;
-pub use map::*;
-
-pub mod differential;
-pub use differential::DiffFeedback;
-#[cfg(feature = "std")]
-pub mod concolic;
-#[cfg(feature = "std")]
-pub use concolic::ConcolicFeedback;
-
-#[cfg(feature = "std")]
-pub mod new_hash_feedback;
-#[cfg(feature = "std")]
-pub use new_hash_feedback::NewHashFeedback;
-#[cfg(feature = "std")]
-pub use new_hash_feedback::NewHashFeedbackMetadata;
-
-#[cfg(feature = "nautilus")]
-pub mod nautilus;
-#[cfg(feature = "std")]
-pub mod stdio;
-pub mod transferred;
-
-/// The module for list feedback
-pub mod list;
-use alloc::string::{String, ToString};
+use alloc::borrow::Cow;
 use core::{
     fmt::{self, Debug, Formatter},
     marker::PhantomData,
 };
 
-use libafl_bolts::Named;
+#[cfg(feature = "std")]
+pub use concolic::ConcolicFeedback;
+pub use differential::DiffFeedback;
+use libafl_bolts::{
+    tuples::{Handle, Handled, MatchNameRef},
+    Named,
+};
 pub use list::*;
+pub use map::*;
 #[cfg(feature = "nautilus")]
 pub use nautilus::*;
+#[cfg(feature = "std")]
+pub use new_hash_feedback::NewHashFeedback;
+#[cfg(feature = "std")]
+pub use new_hash_feedback::NewHashFeedbackMetadata;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -49,6 +35,22 @@ use crate::{
     state::State,
     Error,
 };
+
+pub mod map;
+
+#[cfg(feature = "std")]
+pub mod concolic;
+pub mod differential;
+#[cfg(feature = "nautilus")]
+pub mod nautilus;
+#[cfg(feature = "std")]
+pub mod new_hash_feedback;
+#[cfg(feature = "std")]
+pub mod stdio;
+pub mod transferred;
+
+/// The module for list feedback
+pub mod list;
 
 /// Feedbacks evaluate the observers.
 /// Basically, they reduce the information provided by an observer to a value,
@@ -136,9 +138,12 @@ where
 }
 
 /// Has an associated observer name (mostly used to retrieve the observer with `MatchName` from an `ObserverTuple`)
-pub trait HasObserverName {
+pub trait HasObserverHandle {
+    /// The observer for which we hold a reference
+    type Observer: ?Sized;
+
     /// The name associated with the observer
-    fn observer_name(&self) -> &str;
+    fn observer_handle(&self) -> &Handle<Self::Observer>;
 }
 
 /// A combined feedback consisting of multiple [`Feedback`]s
@@ -154,7 +159,7 @@ where
     pub first: A,
     /// Second [`Feedback`]
     pub second: B,
-    name: String,
+    name: Cow<'static, str>,
     phantom: PhantomData<(S, FL)>,
 }
 
@@ -165,8 +170,8 @@ where
     FL: FeedbackLogic<A, B, S>,
     S: State,
 {
-    fn name(&self) -> &str {
-        self.name.as_ref()
+    fn name(&self) -> &Cow<'static, str> {
+        &self.name
     }
 }
 
@@ -179,7 +184,12 @@ where
 {
     /// Create a new combined feedback
     pub fn new(first: A, second: B) -> Self {
-        let name = format!("{} ({},{})", FL::name(), first.name(), second.name());
+        let name = Cow::from(format!(
+            "{} ({},{})",
+            FL::name(),
+            first.name(),
+            second.name()
+        ));
         Self {
             first,
             second,
@@ -276,6 +286,22 @@ where
     }
 }
 
+impl<A, B, FL, S, T> FeedbackFactory<CombinedFeedback<A, B, FL, S>, S, T>
+    for CombinedFeedback<A, B, FL, S>
+where
+    A: Feedback<S> + FeedbackFactory<A, S, T>,
+    B: Feedback<S> + FeedbackFactory<B, S, T>,
+    FL: FeedbackLogic<A, B, S>,
+    S: State,
+{
+    fn create_feedback(&self, ctx: &T) -> CombinedFeedback<A, B, FL, S> {
+        CombinedFeedback::new(
+            self.first.create_feedback(ctx),
+            self.second.create_feedback(ctx),
+        )
+    }
+}
+
 /// Logical combination of two feedbacks
 pub trait FeedbackLogic<A, B, S>: 'static
 where
@@ -338,37 +364,6 @@ where
         self(ctx)
     }
 }
-
-/// A feedback factory which merely invokes `::default()` for the feedback type provided
-#[derive(Default, Debug, Copy, Clone)]
-pub struct DefaultFeedbackFactory<F>
-where
-    F: Default,
-{
-    phantom: PhantomData<F>,
-}
-
-impl<F> DefaultFeedbackFactory<F>
-where
-    F: Default,
-{
-    /// Create the feedback factory
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
-impl<F, S, T> FeedbackFactory<F, S, T> for DefaultFeedbackFactory<F>
-where
-    F: Feedback<S> + Default,
-    S: State,
-{
-    fn create_feedback(&self, _ctx: &T) -> F {
-        F::default()
-    }
-}
-
 /// Eager `OR` combination of two feedbacks
 #[derive(Debug, Clone)]
 pub struct LogicEagerOr {}
@@ -625,7 +620,7 @@ where
     /// The feedback to invert
     pub first: A,
     /// The name
-    name: String,
+    name: Cow<'static, str>,
     phantom: PhantomData<S>,
 }
 
@@ -697,7 +692,7 @@ where
     S: State,
 {
     #[inline]
-    fn name(&self) -> &str {
+    fn name(&self) -> &Cow<'static, str> {
         &self.name
     }
 }
@@ -709,7 +704,7 @@ where
 {
     /// Creates a new [`NotFeedback`].
     pub fn new(first: A) -> Self {
-        let name = format!("Not({})", first.name());
+        let name = Cow::from(format!("Not({})", first.name()));
         Self {
             first,
             name,
@@ -794,7 +789,7 @@ where
 
 /// A [`CrashFeedback`] reports as interesting if the target crashed.
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct CrashFeedback {}
+pub struct CrashFeedback;
 
 impl<S> Feedback<S> for CrashFeedback
 where
@@ -823,8 +818,9 @@ where
 
 impl Named for CrashFeedback {
     #[inline]
-    fn name(&self) -> &str {
-        "CrashFeedback"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("CrashFeedback");
+        &NAME
     }
 }
 
@@ -832,7 +828,7 @@ impl CrashFeedback {
     /// Creates a new [`CrashFeedback`]
     #[must_use]
     pub fn new() -> Self {
-        Self {}
+        Self
     }
 }
 
@@ -842,12 +838,15 @@ impl Default for CrashFeedback {
     }
 }
 
-/// A feedback factory for crash feedbacks
-pub type CrashFeedbackFactory = DefaultFeedbackFactory<CrashFeedback>;
+impl<S: State, T> FeedbackFactory<CrashFeedback, S, T> for CrashFeedback {
+    fn create_feedback(&self, _ctx: &T) -> CrashFeedback {
+        CrashFeedback::new()
+    }
+}
 
 /// A [`TimeoutFeedback`] reduces the timeout value of a run.
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct TimeoutFeedback {}
+pub struct TimeoutFeedback;
 
 impl<S> Feedback<S> for TimeoutFeedback
 where
@@ -876,8 +875,9 @@ where
 
 impl Named for TimeoutFeedback {
     #[inline]
-    fn name(&self) -> &str {
-        "TimeoutFeedback"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("TimeoutFeedback");
+        &NAME
     }
 }
 
@@ -885,7 +885,7 @@ impl TimeoutFeedback {
     /// Returns a new [`TimeoutFeedback`].
     #[must_use]
     pub fn new() -> Self {
-        Self {}
+        Self
     }
 }
 
@@ -896,14 +896,72 @@ impl Default for TimeoutFeedback {
 }
 
 /// A feedback factory for timeout feedbacks
-pub type TimeoutFeedbackFactory = DefaultFeedbackFactory<TimeoutFeedback>;
+impl<S: State, T> FeedbackFactory<TimeoutFeedback, S, T> for TimeoutFeedback {
+    fn create_feedback(&self, _ctx: &T) -> TimeoutFeedback {
+        TimeoutFeedback::new()
+    }
+}
+
+/// A [`DiffExitKindFeedback`] checks if there is a difference in the [`crate::executors::ExitKind`]s in a [`crate::executors::DiffExecutor`].
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct DiffExitKindFeedback;
+
+impl<S> Feedback<S> for DiffExitKindFeedback
+where
+    S: State,
+{
+    #[allow(clippy::wrong_self_convention)]
+    fn is_interesting<EM, OT>(
+        &mut self,
+        _state: &mut S,
+        _manager: &mut EM,
+        _input: &S::Input,
+        _observers: &OT,
+        exit_kind: &ExitKind,
+    ) -> Result<bool, Error>
+    where
+        EM: EventFirer<State = S>,
+        OT: ObserversTuple<S>,
+    {
+        Ok(matches!(exit_kind, ExitKind::Diff { .. }))
+    }
+}
+
+impl Named for DiffExitKindFeedback {
+    #[inline]
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("DiffExitKindFeedback");
+        &NAME
+    }
+}
+
+impl DiffExitKindFeedback {
+    /// Returns a new [`DiffExitKindFeedback`].
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for DiffExitKindFeedback {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A feedback factory for diff exit kind feedbacks
+impl<S: State, T> FeedbackFactory<DiffExitKindFeedback, S, T> for DiffExitKindFeedback {
+    fn create_feedback(&self, _ctx: &T) -> DiffExitKindFeedback {
+        DiffExitKindFeedback::new()
+    }
+}
 
 /// Nop feedback that annotates execution time in the new testcase, if any
 /// for this Feedback, the testcase is never interesting (use with an OR).
 /// It decides, if the given [`TimeObserver`] value of a run is interesting.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct TimeFeedback {
-    name: String,
+    observer_handle: Handle<TimeObserver>,
 }
 
 impl<S> Feedback<S> for TimeFeedback
@@ -940,7 +998,7 @@ where
         OT: ObserversTuple<S>,
         EM: EventFirer<State = S>,
     {
-        let observer = observers.match_name::<TimeObserver>(self.name()).unwrap();
+        let observer = observers.get(&self.observer_handle).unwrap();
         *testcase.exec_time_mut() = *observer.last_runtime();
         Ok(())
     }
@@ -954,25 +1012,17 @@ where
 
 impl Named for TimeFeedback {
     #[inline]
-    fn name(&self) -> &str {
-        self.name.as_str()
+    fn name(&self) -> &Cow<'static, str> {
+        self.observer_handle.name()
     }
 }
 
 impl TimeFeedback {
-    /// Creates a new [`TimeFeedback`], deciding if the value of a [`TimeObserver`] with the given `name` of a run is interesting.
-    #[must_use]
-    pub fn new(name: &'static str) -> Self {
-        Self {
-            name: name.to_string(),
-        }
-    }
-
     /// Creates a new [`TimeFeedback`], deciding if the given [`TimeObserver`] value of a run is interesting.
     #[must_use]
-    pub fn with_observer(observer: &TimeObserver) -> Self {
+    pub fn new(observer: &TimeObserver) -> Self {
         Self {
-            name: observer.name().to_string(),
+            observer_handle: observer.handle(),
         }
     }
 }
@@ -1014,8 +1064,9 @@ where
 
 impl Named for ConstFeedback {
     #[inline]
-    fn name(&self) -> &str {
-        "ConstFeedback"
+    fn name(&self) -> &Cow<'static, str> {
+        static NAME: Cow<'static, str> = Cow::Borrowed("ConstFeedback");
+        &NAME
     }
 }
 

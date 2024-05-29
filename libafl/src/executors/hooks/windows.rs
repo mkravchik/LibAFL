@@ -112,6 +112,8 @@ pub mod windows_exception_handler {
         sync::atomic::{compiler_fence, Ordering},
     };
     #[cfg(feature = "std")]
+    use std::io::Write;
+    #[cfg(feature = "std")]
     use std::panic;
 
     use libafl_bolts::os::windows_exceptions::{
@@ -130,7 +132,7 @@ pub mod windows_exception_handler {
         },
         feedbacks::Feedback,
         fuzzer::HasObjective,
-        inputs::UsesInput,
+        inputs::{Input, UsesInput},
         state::{HasCorpus, HasExecutions, HasSolutions, State},
     };
 
@@ -330,7 +332,7 @@ pub mod windows_exception_handler {
         let mut is_crash = true;
         #[cfg(feature = "std")]
         if let Some(exception_pointers) = exception_pointers.as_mut() {
-            let code = ExceptionCode::from(
+            let code: ExceptionCode = ExceptionCode::from(
                 exception_pointers
                     .ExceptionRecord
                     .as_mut()
@@ -356,15 +358,18 @@ pub mod windows_exception_handler {
                 {
                     use std::{
                         fs::File,
-                        os::windows::{io::AsRawHandle, raw::HANDLE},
+                        os::windows::io::AsRawHandle,
                         ptr::null_mut,
                     };
 
                     use winapi::{
                         shared::minwindef::{BOOL, DWORD, FALSE},
-                        um::processthreadsapi::{
-                            GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId,
-                        },
+                        um::{
+                            winnt::HANDLE,
+                            processthreadsapi::{
+                                GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId,
+                            },
+                        }
                     };
 
                     const MINI_DUMP_FULL_MEMORY_INFO: i32 = 0x00000800;
@@ -488,7 +493,17 @@ pub mod windows_exception_handler {
             if is_crash {
                 log::info!("Running observers and exiting!");
                 let input = data.take_current_input::<<E::State as UsesInput>::Input>();
-
+                {
+                    let mut bsod = Vec::new();
+                    {
+                        let mut writer = std::io::BufWriter::new(&mut bsod);
+                        writeln!(writer, "input: {:?}", input.generate_name(0)).unwrap();
+                        libafl_bolts::minibsod::generate_minibsod(&mut writer, exception_pointers)
+                            .unwrap();
+                        writer.flush().unwrap();
+                    }
+                    log::error!("{}", std::str::from_utf8(&bsod).unwrap());
+                }
                 run_observers_and_save_state::<E, EM, OF, Z>(
                     executor,
                     state,

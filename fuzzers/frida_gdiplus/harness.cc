@@ -21,8 +21,13 @@ ULONG_PTR           gdiplusToken;
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
   switch (fdwReason) {
     case DLL_PROCESS_ATTACH:
+      LoadLibraryA("ole32.dll");
       LoadLibraryA("gdi32full.dll");
       LoadLibraryA("WindowsCodecs.dll");
+      LoadLibraryA("shcore.dll");
+      GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
+      LoadLibraryA("gdi32.dll");
+      // DebugBreak();
       break;
   }
   return TRUE;
@@ -31,10 +36,9 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
 extern "C" __declspec(dllexport) int LLVMFuzzerTestOneInput(const uint8_t *data,
                                                             size_t size) {
   static DWORD init = 0;
-  if (!init) {
-    GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
-    init = 1;
-  }
+  // if (!init) {
+  // init = 1;
+  // }
 
   // TEMP hack to test the hooking
   // if there data is longer than 100
@@ -54,7 +58,8 @@ extern "C" __declspec(dllexport) int LLVMFuzzerTestOneInput(const uint8_t *data,
   if (m_hBuffer) {
     void *pBuffer = ::GlobalLock(m_hBuffer);
     if (pBuffer) {
-      CopyMemory(pBuffer, data, size);
+      memcpy(pBuffer, data, size);
+      // CopyMemory(pBuffer, data, size);
 
       IStream *pStream = NULL;
       if (::CreateStreamOnHGlobal(m_hBuffer, FALSE, &pStream) == S_OK) {

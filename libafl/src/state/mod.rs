@@ -1,5 +1,6 @@
 //! The fuzzer, and state are the core pieces of every good fuzzer
 
+#[cfg(feature = "std")]
 use alloc::vec::Vec;
 use core::{
     borrow::BorrowMut,
@@ -22,18 +23,21 @@ use libafl_bolts::{
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
+mod stack;
+pub use stack::StageStack;
+
 #[cfg(feature = "introspection")]
 use crate::monitors::ClientPerfMonitor;
 #[cfg(feature = "scalability_introspection")]
 use crate::monitors::ScalabilityMonitor;
 use crate::{
-    corpus::{Corpus, CorpusId, HasCurrentCorpusIdx, HasTestcase, Testcase},
+    corpus::{Corpus, CorpusId, HasCurrentCorpusId, HasTestcase, Testcase},
     events::{Event, EventFirer, LogSeverity},
     feedbacks::Feedback,
     fuzzer::{Evaluator, ExecuteInputResult},
     generators::Generator,
     inputs::{Input, UsesInput},
-    stages::{HasCurrentStage, HasNestedStageStatus},
+    stages::{HasCurrentStage, HasNestedStageStatus, StageId},
     Error, HasMetadata, HasNamedMetadata,
 };
 
@@ -49,7 +53,7 @@ pub trait State:
     + DeserializeOwned
     + MaybeHasClientPerfMonitor
     + MaybeHasScalabilityMonitor
-    + HasCurrentCorpusIdx
+    + HasCurrentCorpusId
     + HasCurrentStage
 {
 }
@@ -193,6 +197,24 @@ pub trait HasLastReportTime {
     fn last_report_time_mut(&mut self) -> &mut Option<Duration>;
 }
 
+/// Struct that holds the options for input loading
+#[cfg(feature = "std")]
+pub struct LoadConfig<'a, I, S, Z> {
+    /// Load Input even if it was deemed "uninteresting" by the fuzzer
+    forced: bool,
+    /// Function to load input from a Path
+    loader: &'a mut dyn FnMut(&mut Z, &mut S, &Path) -> Result<I, Error>,
+    /// Error if Input leads to a Solution.
+    exit_on_solution: bool,
+}
+
+#[cfg(feature = "std")]
+impl<'a, I, S, Z> Debug for LoadConfig<'a, I, S, Z> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "LoadConfig {{}}")
+    }
+}
+
 /// The state a fuzz run.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(bound = "
@@ -239,10 +261,7 @@ pub struct StdState<I, C, R, SC> {
     last_report_time: Option<Duration>,
     /// The current index of the corpus; used to record for resumable fuzzing.
     corpus_idx: Option<CorpusId>,
-    /// The stage indexes for each nesting of stages
-    stage_idx_stack: Vec<usize>,
-    /// The current stage depth
-    stage_depth: usize,
+    stage_stack: StageStack,
     phantom: PhantomData<I>,
 }
 
@@ -439,7 +458,7 @@ impl<I, C, R, SC> HasStartTime for StdState<I, C, R, SC> {
     }
 }
 
-impl<I, C, R, SC> HasCurrentCorpusIdx for StdState<I, C, R, SC> {
+impl<I, C, R, SC> HasCurrentCorpusId for StdState<I, C, R, SC> {
     fn set_corpus_idx(&mut self, idx: CorpusId) -> Result<(), Error> {
         self.corpus_idx = Some(idx);
         Ok(())
@@ -450,7 +469,7 @@ impl<I, C, R, SC> HasCurrentCorpusIdx for StdState<I, C, R, SC> {
         Ok(())
     }
 
-    fn current_corpus_idx(&self) -> Result<Option<CorpusId>, Error> {
+    fn current_corpus_id(&self) -> Result<Option<CorpusId>, Error> {
         Ok(self.corpus_idx)
     }
 }
@@ -485,10 +504,10 @@ where
 impl<I, T> HasCurrentTestcase<I> for T
 where
     I: Input,
-    T: HasCorpus + HasCurrentCorpusIdx + UsesInput<Input = I>,
+    T: HasCorpus + HasCurrentCorpusId + UsesInput<Input = I>,
 {
     fn current_testcase(&self) -> Result<Ref<'_, Testcase<I>>, Error> {
-        let Some(corpus_id) = self.current_corpus_idx()? else {
+        let Some(corpus_id) = self.current_corpus_id()? else {
             return Err(Error::key_not_found(
                 "We are not currently processing a testcase",
             ));
@@ -498,7 +517,7 @@ where
     }
 
     fn current_testcase_mut(&self) -> Result<RefMut<'_, Testcase<I>>, Error> {
-        let Some(corpus_id) = self.current_corpus_idx()? else {
+        let Some(corpus_id) = self.current_corpus_id()? else {
             return Err(Error::illegal_state(
                 "We are not currently processing a testcase",
             ));
@@ -514,41 +533,30 @@ where
 }
 
 impl<I, C, R, SC> HasCurrentStage for StdState<I, C, R, SC> {
-    fn set_stage(&mut self, idx: usize) -> Result<(), Error> {
-        // ensure we are in the right frame
-        if self.stage_depth != self.stage_idx_stack.len() {
-            return Err(Error::illegal_state(
-                "stage not resumed before setting stage",
-            ));
-        }
-        self.stage_idx_stack.push(idx);
-        Ok(())
+    fn set_current_stage_idx(&mut self, idx: StageId) -> Result<(), Error> {
+        self.stage_stack.set_current_stage_idx(idx)
     }
 
     fn clear_stage(&mut self) -> Result<(), Error> {
-        self.stage_idx_stack.truncate(self.stage_depth);
-        Ok(())
+        self.stage_stack.clear_stage()
     }
 
-    fn current_stage(&self) -> Result<Option<usize>, Error> {
-        Ok(self.stage_idx_stack.get(self.stage_depth).copied())
+    fn current_stage_idx(&self) -> Result<Option<StageId>, Error> {
+        self.stage_stack.current_stage_idx()
     }
 
     fn on_restart(&mut self) -> Result<(), Error> {
-        self.stage_depth = 0; // reset the stage depth so that we may resume inward
-        Ok(())
+        self.stage_stack.on_restart()
     }
 }
 
 impl<I, C, R, SC> HasNestedStageStatus for StdState<I, C, R, SC> {
     fn enter_inner_stage(&mut self) -> Result<(), Error> {
-        self.stage_depth += 1;
-        Ok(())
+        self.stage_stack.enter_inner_stage()
     }
 
     fn exit_inner_stage(&mut self) -> Result<(), Error> {
-        self.stage_depth -= 1;
-        Ok(())
+        self.stage_stack.exit_inner_stage()
     }
 }
 
@@ -647,8 +655,7 @@ where
         executor: &mut E,
         manager: &mut EM,
         file_list: &[PathBuf],
-        forced: bool,
-        loader: &mut dyn FnMut(&mut Z, &mut Self, &Path) -> Result<I, Error>,
+        load_config: LoadConfig<I, Self, Z>,
     ) -> Result<(), Error>
     where
         E: UsesState<State = Self>,
@@ -664,45 +671,45 @@ where
             self.remaining_initial_files = Some(file_list.to_vec());
         }
 
-        self.continue_loading_initial_inputs_custom(fuzzer, executor, manager, forced, loader)
+        self.continue_loading_initial_inputs_custom(fuzzer, executor, manager, load_config)
     }
+
     fn load_file<E, EM, Z>(
         &mut self,
         path: &PathBuf,
         manager: &mut EM,
         fuzzer: &mut Z,
         executor: &mut E,
-        forced: bool,
-        loader: &mut dyn FnMut(&mut Z, &mut Self, &Path) -> Result<I, Error>,
-    ) -> Result<(), Error>
+        config: &mut LoadConfig<I, Self, Z>,
+    ) -> Result<ExecuteInputResult, Error>
     where
         E: UsesState<State = Self>,
         EM: EventFirer<State = Self>,
         Z: Evaluator<E, EM, State = Self>,
     {
         log::info!("Loading file {:?} ...", &path);
-        let input = loader(fuzzer, self, path)?;
-        if forced {
+        let input = (config.loader)(fuzzer, self, path)?;
+        if config.forced {
             let _: CorpusId = fuzzer.add_input(self, executor, manager, input)?;
+            Ok(ExecuteInputResult::Corpus)
         } else {
             let (res, _) = fuzzer.evaluate_input(self, executor, manager, input.clone())?;
             if res == ExecuteInputResult::None {
                 fuzzer.add_disabled_input(self, input)?;
                 log::warn!("input {:?} was not interesting, adding as disabled.", &path);
             }
+            Ok(res)
         }
-        Ok(())
     }
     /// Loads initial inputs from the passed-in `in_dirs`.
-    /// If `forced` is true, will add all testcases, no matter what.
-    /// This method takes a list of files.
+    /// This method takes a list of files and a `LoadConfig`
+    /// which specifies the special handling of initial inputs
     fn continue_loading_initial_inputs_custom<E, EM, Z>(
         &mut self,
         fuzzer: &mut Z,
         executor: &mut E,
         manager: &mut EM,
-        forced: bool,
-        loader: &mut dyn FnMut(&mut Z, &mut Self, &Path) -> Result<I, Error>,
+        mut config: LoadConfig<I, Self, Z>,
     ) -> Result<(), Error>
     where
         E: UsesState<State = Self>,
@@ -712,7 +719,13 @@ where
         loop {
             match self.next_file() {
                 Ok(path) => {
-                    self.load_file(&path, manager, fuzzer, executor, forced, loader)?;
+                    let res = self.load_file(&path, manager, fuzzer, executor, &mut config)?;
+                    if config.exit_on_solution && matches!(res, ExecuteInputResult::Solution) {
+                        return Err(Error::invalid_corpus(format!(
+                            "Input {} resulted in a solution.",
+                            path.display()
+                        )));
+                    }
                 }
                 Err(Error::IteratorEnd(_, _)) => break,
                 Err(e) => return Err(e),
@@ -751,8 +764,11 @@ where
             executor,
             manager,
             file_list,
-            false,
-            &mut |_, _, path| I::from_file(path),
+            LoadConfig {
+                loader: &mut |_, _, path| I::from_file(path),
+                forced: false,
+                exit_on_solution: false,
+            },
         )
     }
 
@@ -776,8 +792,11 @@ where
             fuzzer,
             executor,
             manager,
-            true,
-            &mut |_, _, path| I::from_file(path),
+            LoadConfig {
+                loader: &mut |_, _, path| I::from_file(path),
+                forced: true,
+                exit_on_solution: false,
+            },
         )
     }
     /// Loads initial inputs from the passed-in `in_dirs`.
@@ -800,8 +819,11 @@ where
             executor,
             manager,
             file_list,
-            true,
-            &mut |_, _, path| I::from_file(path),
+            LoadConfig {
+                loader: &mut |_, _, path| I::from_file(path),
+                forced: true,
+                exit_on_solution: false,
+            },
         )
     }
 
@@ -823,8 +845,38 @@ where
             fuzzer,
             executor,
             manager,
-            false,
-            &mut |_, _, path| I::from_file(path),
+            LoadConfig {
+                loader: &mut |_, _, path| I::from_file(path),
+                forced: false,
+                exit_on_solution: false,
+            },
+        )
+    }
+
+    /// Loads initial inputs from the passed-in `in_dirs`.
+    /// Will return a `CorpusError` if a solution is found
+    pub fn load_initial_inputs_disallow_solution<E, EM, Z>(
+        &mut self,
+        fuzzer: &mut Z,
+        executor: &mut E,
+        manager: &mut EM,
+        in_dirs: &[PathBuf],
+    ) -> Result<(), Error>
+    where
+        E: UsesState<State = Self>,
+        EM: EventFirer<State = Self>,
+        Z: Evaluator<E, EM, State = Self>,
+    {
+        self.canonicalize_input_dirs(in_dirs)?;
+        self.continue_loading_initial_inputs_custom(
+            fuzzer,
+            executor,
+            manager,
+            LoadConfig {
+                loader: &mut |_, _, path| I::from_file(path),
+                forced: false,
+                exit_on_solution: true,
+            },
         )
     }
 
@@ -862,8 +914,11 @@ where
                 fuzzer,
                 executor,
                 manager,
-                false,
-                &mut |_, _, path| I::from_file(path),
+                LoadConfig {
+                    loader: &mut |_, _, path| I::from_file(path),
+                    forced: false,
+                    exit_on_solution: false,
+                },
             )?;
         } else {
             self.canonicalize_input_dirs(in_dirs)?;
@@ -1042,8 +1097,7 @@ where
             dont_reenter: None,
             last_report_time: None,
             corpus_idx: None,
-            stage_depth: 0,
-            stage_idx_stack: Vec::new(),
+            stage_stack: StageStack::default(),
             phantom: PhantomData,
             #[cfg(feature = "std")]
             multicore_inputs_processed: None,
@@ -1098,6 +1152,16 @@ impl<I> NopState<I> {
     }
 }
 
+impl<I> HasMaxSize for NopState<I> {
+    fn max_size(&self) -> usize {
+        16_384
+    }
+
+    fn set_max_size(&mut self, _max_size: usize) {
+        unimplemented!("NopState doesn't allow setting a max size")
+    }
+}
+
 impl<I> UsesInput for NopState<I>
 where
     I: Input,
@@ -1149,7 +1213,7 @@ impl<I> HasRand for NopState<I> {
 
 impl<I> State for NopState<I> where I: Input {}
 
-impl<I> HasCurrentCorpusIdx for NopState<I> {
+impl<I> HasCurrentCorpusId for NopState<I> {
     fn set_corpus_idx(&mut self, _idx: CorpusId) -> Result<(), Error> {
         Ok(())
     }
@@ -1158,13 +1222,13 @@ impl<I> HasCurrentCorpusIdx for NopState<I> {
         Ok(())
     }
 
-    fn current_corpus_idx(&self) -> Result<Option<CorpusId>, Error> {
+    fn current_corpus_id(&self) -> Result<Option<CorpusId>, Error> {
         Ok(None)
     }
 }
 
 impl<I> HasCurrentStage for NopState<I> {
-    fn set_stage(&mut self, _idx: usize) -> Result<(), Error> {
+    fn set_current_stage_idx(&mut self, _idx: StageId) -> Result<(), Error> {
         Ok(())
     }
 
@@ -1172,7 +1236,7 @@ impl<I> HasCurrentStage for NopState<I> {
         Ok(())
     }
 
-    fn current_stage(&self) -> Result<Option<usize>, Error> {
+    fn current_stage_idx(&self) -> Result<Option<StageId>, Error> {
         Ok(None)
     }
 }
