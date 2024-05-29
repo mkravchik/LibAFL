@@ -221,7 +221,12 @@ class DrcovBasicBlockSizeCalculator:
         # alternatively, read the PCTable from the ELF file, if present
         self.pcs = parsePCTable(file_name, self.verbose)
         if self.pcs is not None:
-            self.pcs = sorted(self.pcs, key=lambda x: x[0])
+            # The PC table is NOT sorted, and we are getting the index into it
+            # However, in order to know the size of the basic block, we need to know the next address
+            # So we need to sort it and keep the dictionary of sizes
+            sorted_pcs = sorted(self.pcs, key=lambda x: x[0])
+            self.pc_sizes = {sorted_pcs[i][0]: sorted_pcs[i+1][0] - sorted_pcs[i][0] for i in range(len(sorted_pcs) - 1)}
+            self.pc_sizes[sorted_pcs[-1][0]] = -1 # the last one is a special case
 
     def _find_section_offset(self, elffile, section_name):
         for section in elffile.iter_sections():
@@ -273,19 +278,26 @@ class DrcovBasicBlockSizeCalculator:
         # If we have the PCTable, we can use it to find the size of the basic block
         pc_table_bb_size = None
         if self.pcs is not None:
-            # Find the index of the first item greater than address
-            i = bisect.bisect_right(self.pcs, (address,))
+            # # Find the index of the first item greater than address
+            # i = bisect.bisect_right(self.pcs, (address,))
 
-            if i != len(self.pcs):
-                if i < len(self.pcs) - 1:
-                    pc_table_bb_size = self.pcs[i + 1][0] - address
-                    return pc_table_bb_size
-                else:
-                    # we are in trouble, we are at the last item and I have no idea how to find the size of the BB
+            # if i != len(self.pcs):
+            #     if i < len(self.pcs) - 1:
+            #         pc_table_bb_size = self.pcs[i + 1][0] - address
+            #         return pc_table_bb_size
+            #     else:
+            #         # we are in trouble, we are at the last item and I have no idea how to find the size of the BB
+            #         print(f"Address {hex(address)} is the last in PCTable, calculating size from disassembly")
+            # else:
+            #     print(f"Address {hex(address)} not found in PCTable")
+            if address in self.pc_sizes:
+                pc_table_bb_size = self.pc_sizes[address]
+                if pc_table_bb_size == -1:
                     print(f"Address {hex(address)} is the last in PCTable, calculating size from disassembly")
+                else:
+                    return pc_table_bb_size
             else:
-                print(f"Address {hex(address)} not found in PCTable")
-                
+                print(f"Address {hex(address)} not found in PCTable")                
         """
         Determine the size of a basic block given its start address using Capstone.
         
