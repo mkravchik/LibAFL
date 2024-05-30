@@ -1,10 +1,9 @@
 use alloc::borrow::Cow;
-
 #[cfg(unix)]
 use std::fs;
 use std::{
     collections::HashMap,
-    hash::{BuildHasher, Hasher},
+    hash::{BuildHasher, Hash, Hasher},
     path::PathBuf,
 };
 
@@ -24,7 +23,6 @@ use libafl_targets::{
 };
 use rangemap::RangeMap;
 use serde::{Deserialize, Serialize};
-use std::hash::Hash;
 /// Map observer that accumulates hitcounts and saves them in DrCov format.
 ///
 #[derive(Serialize, Deserialize, Clone, Debug)]

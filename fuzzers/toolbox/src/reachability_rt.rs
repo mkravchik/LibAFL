@@ -22,7 +22,10 @@ use libafl::{
     // state::HasMetadata,
     // Error,
 };
-use libafl_bolts::{HasLen, Named, tuples::{Handle, Handled, MatchNameRef}};
+use libafl_bolts::{
+    tuples::{Handle, Handled, MatchNameRef},
+    HasLen, Named,
+};
 use libafl_frida::helper::FridaRuntime;
 use rangemap::RangeMap;
 //use std::os::windows::ffi::OsStringExt;
@@ -289,12 +292,9 @@ pub struct ReachabilityObserver {
 impl ReachabilityObserver {
     /// Creates a new [`ReachabilityObserver`] with the given name.
     #[must_use]
-    pub fn new<S>(
-        observer_name: S,
-        map: *mut u8, 
-        hooks_file: Option<&str>) -> Self 
-        where
-            S: Into<Cow<'static, str>> + Clone,
+    pub fn new<S>(observer_name: S, map: *mut u8, hooks_file: Option<&str>) -> Self
+    where
+        S: Into<Cow<'static, str>> + Clone,
     {
         log::info!("ReachabilityObserver created");
         let hooks = match hooks_file {
@@ -312,7 +312,7 @@ impl ReachabilityObserver {
             .enumerate()
             .map(|(idx, hook)| (idx, hook.api_name.clone()))
             .collect();
-        
+
         Self {
             observer_name: observer_name.clone().into(),
             base: unsafe { StdMapObserver::from_mut_ptr(observer_name, map, MAP_SIZE) },
@@ -462,7 +462,6 @@ where
             .get(&self.o_ref)
             .expect("A ReachabilityFeedback needs a ReachabilityObserver");
 
-
         let invocations = observer.get_invocations();
         if !invocations.is_empty() {
             testcase.add_metadata(ReachabilityMetadata::new(invocations.clone()));
@@ -487,8 +486,7 @@ impl HasObserverHandle for ReachabilityFeedback {
     }
 }
 
-impl ReachabilityFeedback
-{
+impl ReachabilityFeedback {
     /// Returns a new [`ReachabilityFeedback`].
     #[must_use]
     pub fn new(observer: &ReachabilityObserver) -> Self {

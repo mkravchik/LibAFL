@@ -424,9 +424,7 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                     // New maximization map feedback linked to the reaches observer
                     // TODO - check whether I need to track novelties as well
                     // MaxMapFeedback::tracking(&reachability_observer, true, true),
-                    ReachabilityFeedback::new(
-                        &reachability_observer_meta
-                    ),
+                    ReachabilityFeedback::new(&reachability_observer_meta),
                     NewHashFeedbackWithStack::new(&bt_observer),
                     CrashFeedback::new(),
                     TimeoutFeedback::new()

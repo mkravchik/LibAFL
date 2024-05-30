@@ -12,8 +12,11 @@ use libafl::{
     observers::{BacktraceObserver, HarnessType, Observer, ObserverWithHashField, ObserversTuple},
     state::State,
 };
-use libafl_bolts::{impl_serdeany, Error, Named, 
-    tuples::{Handle, MatchNameRef}};
+use libafl_bolts::{
+    impl_serdeany,
+    tuples::{Handle, MatchNameRef},
+    Error, Named,
+};
 use log::{info, warn};
 use serde::{
     // Serializer,
@@ -285,7 +288,7 @@ impl<'a> BacktraceObserverWithStack<'a> {
         backtrace_hash: &'a mut Option<u64>,
         harness_type: HarnessType,
         with_symbols: bool,
-    ) -> Self 
+    ) -> Self
     where
         S: Into<Cow<'static, str>>,
     {
@@ -423,7 +426,6 @@ where
             .get(&self.0.observer_handle())
             .expect("A NewHashFeedbackWithStack needs a BacktraceObserverWithStack");
 
-        
         match observer.get_backtrace() {
             // Performance problem here!
             Some(b) => testcase.add_metadata(BacktraceMetadata::new(b.clone())),
@@ -451,8 +453,7 @@ impl<'a, S> HasObserverHandle for NewHashFeedbackWithStack<'a, S> {
     }
 }
 
-impl<'a, S> NewHashFeedbackWithStack<'a, S>
-{
+impl<'a, S> NewHashFeedbackWithStack<'a, S> {
     /// Returns a new [`NewHashFeedbackWithStack`].
     #[must_use]
     pub fn new(observer: &BacktraceObserverWithStack<'a>) -> Self {
