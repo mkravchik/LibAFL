@@ -12,7 +12,7 @@ use core::{
 };
 #[cfg(unix)]
 use std::num::NonZeroUsize;
-use std::{ffi::c_void, ptr::write_volatile, rc::Rc};
+use std::{ffi::{c_void, c_ulong, c_long}, ptr::write_volatile, rc::Rc};
 
 use backtrace::Backtrace;
 #[cfg(target_arch = "x86_64")]
@@ -52,6 +52,7 @@ use libc::{getrlimit64, rlimit64};
 #[cfg(unix)]
 use nix::sys::mman::{mmap, MapFlags, ProtFlags};
 use rangemap::RangeMap;
+use winapi::ctypes::c_uint;
 
 #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 use crate::utils::frida_to_cs;
@@ -362,18 +363,21 @@ impl AsanRuntime {
     /// Make sure the specified memory is unpoisoned
     #[allow(clippy::unused_self)]
     pub fn unpoison(&mut self, address: usize, size: usize) {
+        log::info!("unpoison {:x} {}", address, size);
         self.allocator
             .map_shadow_for_region(address, address + size, true);
     }
 
     /// Make sure the specified memory is poisoned
     pub fn poison(&mut self, address: usize, size: usize) {
+        log::info!("poison {:x} {}", address, size);
         Allocator::poison(self.allocator.map_to_shadow(address), size);
     }
 
     /// Add a stalked address to real address mapping.
     #[inline]
     pub fn add_stalked_address(&mut self, stalked: usize, real: usize) {
+        log::info!("add_stalked_address stalked {:x} real {:x}", stalked, real);
         self.stalked_addresses.insert(stalked, real);
     }
 
@@ -381,6 +385,7 @@ impl AsanRuntime {
     /// real address, the stalked address is returned.
     #[must_use]
     pub fn real_address_for_stalked(&self, stalked: usize) -> usize {
+        // log::info!("real_address_for_stalked stalked {:x}", stalked);
         self.stalked_addresses
             .get(&stalked)
             .map_or(stalked, |addr| *addr)
@@ -389,6 +394,7 @@ impl AsanRuntime {
     /// Unpoison all the memory that is currently mapped with read/write permissions.
     #[allow(clippy::unused_self)]
     pub fn unpoison_all_existing_memory(&mut self) {
+        log::info!("unpoison_all_existing_memory");
         self.allocator.unpoison_all_existing_memory();
     }
 
@@ -501,6 +507,7 @@ impl AsanRuntime {
                 (max_start, end)
             }
             #[cfg(windows)]
+            log::info!("current_stack returns {start:x} {end:x}");
             (start, end)
         } else {
             panic!("Couldn't find stack mapping!");
@@ -520,6 +527,7 @@ impl AsanRuntime {
         let range_details = RangeDetails::with_address(tls_address as u64).unwrap();
         let start = range_details.memory_range().base_address().0 as usize;
         let end = start + range_details.memory_range().size();
+        log::info!("current_tls returns {start:x} {end:x}");
         (start, end)
     }
 
@@ -539,23 +547,21 @@ impl AsanRuntime {
         Interceptor::current_invocation().cpu_context().rip() as usize
     }
 
+    /// Hooks malloc/free
     pub fn register_hooks(hook_rt: &mut HookRuntime) {
-
-
-        let malloc_address = Module::find_export_by_name(Some("ucrtbased.dll"), "malloc").unwrap().0;
+        let malloc_address = Module::find_export_by_name(Some("ucrtbase.dll"), "malloc").unwrap().0;
         log::error!("malloc_address: {:?}", malloc_address);
         winsafe::OutputDebugString(&format!("malloc_address: {:?}", malloc_address));
-        hook_rt.register_hook(malloc_address as usize, |address, context| {
+        hook_rt.register_hook(malloc_address as usize, |_address, _context| {
             log::error!("in malloc!");
         });
 
-        let free_address = Module::find_export_by_name(Some("ucrtbased.dll"), "free").unwrap().0;
+        let free_address = Module::find_export_by_name(Some("ucrtbase.dll"), "free").unwrap().0;
         log::error!("free: {:?}", free_address);
         winsafe::OutputDebugString(&format!("free_address: {:?}", free_address));
-        hook_rt.register_hook(free_address as usize, |address, context| {
+        hook_rt.register_hook(free_address as usize, |_address, _context| {
             log::error!("in free!");
         });
-
     }
     /// Hook all functions required for ASAN to function, replacing them with our own
     /// implementations.
@@ -576,10 +582,18 @@ impl AsanRuntime {
                         let real_address = this.real_address_for_stalked(invocation.return_addr());
                         if this.hooks_enabled && !this.suppressed_addresses.contains(&real_address) /*&& this.module_map.as_ref().unwrap().find(real_address as u64).is_some()*/ {
                             this.hooks_enabled = false;
+                            log::info!("{:?} Disabling hooks to call hook_{}  from {:x} (real {:x}", 
+                                std::thread::current().id(), stringify!($name), invocation.return_addr(), real_address);
                             let result = this.[<hook_ $name>]($($param),*);
                             this.hooks_enabled = true;
+                            log::info!("{:?} Enabling hooks after hook_{}", std::thread::current().id(), stringify!($name));
                             result
                         } else {
+                            // if (!this.hooks_enabled){
+                            //     log::info!("{:?} Hooks disabled! Calling original {}", std::thread::current().id(), stringify!($name));
+                            // }
+                            log::info!("{:?} Calling original {} from {:x} (real {:x})", 
+                                std::thread::current().id(), stringify!($name), invocation.return_addr(), real_address);
                             $name($($param),*)
                         }
                     }
@@ -592,6 +606,7 @@ impl AsanRuntime {
             }
         }
 
+        #[allow(unused_macros)]
         macro_rules! hook_priv_func {
             ($lib:expr, $name:ident, ($($param:ident : $param_type:ty),*), $return_type:ty) => {
                 paste::paste! {
@@ -632,12 +647,17 @@ impl AsanRuntime {
                     unsafe extern "system" fn [<replacement_ $name>]($($param: $param_type),*) -> $return_type {
                         let mut invocation = Interceptor::current_invocation();
                         let this = &mut *(invocation.replacement_data().unwrap().0 as *mut AsanRuntime);
+                        log::info!("{:?} Calling hook_check_{}", std::thread::current().id(), stringify!($name));
                         if this.[<hook_check_ $name>]($($param),*) {
                             this.hooks_enabled = false;
+                            log::info!("{:?} Calling hook_{}", std::thread::current().id(), stringify!($name));
                             let result = this.[<hook_ $name>]($($param),*);
                             this.hooks_enabled = true;
                             result
                         } else {
+                            log::info!("{:?} Calling original {} from {:x} (real {:x}", 
+                                std::thread::current().id(), stringify!($name),  invocation.return_addr(),
+                                this.real_address_for_stalked(invocation.return_addr()));
                             $name($($param),*)
                         }
                     }
@@ -708,17 +728,99 @@ impl AsanRuntime {
             (file: usize, file_mapping_attributes: *const c_void, protect: i32, maximum_size_high: u32, maximum_size_low: u32, name: *const c_void),
             usize
         );
+
+
         #[cfg(windows)]
+        hook_func!(
+            Some("ntdll"),
+            NtAllocateVirtualMemory,
+            (ProcessHandle: *mut c_void,
+            BaseAddress: *mut *mut c_void,
+            ZeroBits: usize,
+            RegionSize: *mut usize,
+            AllocationType: c_ulong,
+            Protect: c_ulong),
+            c_long
+            );
+        #[cfg(windows)]
+        hook_func!(
+            Some("ntdll"),
+            NtAllocateVirtualMemoryEx,
+            (ProcessHandle: *mut c_void,
+            BaseAddress: *mut *mut c_void,
+            RegionSize: *mut usize,
+            AllocationType: c_ulong,
+            Protect: c_ulong,
+            ExtendedParameters: *mut c_void,
+            ParameterCount: c_ulong
+            ),
+            c_long
+            );
+    
+        #[cfg(windows)]
+        hook_func!(
+            Some("ntdll"),
+            NtFreeVirtualMemory,
+            (ProcessHandle: *mut c_void,
+            BaseAddress: *mut *mut c_void,
+            RegionSize: *mut usize,
+            FreeType: c_ulong),
+            c_long
+            );
+
+        #[cfg(windows)]
+        hook_func!(
+            None,
+            GlobalAlloc,
+            (flags: c_uint,  size: usize),
+            *mut c_void
+        );
+    
+        #[cfg(windows)]
+        hook_func!(
+            None,
+            GlobalFree,
+            (ptr: *mut c_void),
+            *mut c_void
+        );
+
+        #[cfg(windows)]
+        hook_func!(
+            None,
+            GlobalLock,
+            (handle: *mut c_void),
+            *mut c_void
+        );
+
+        #[cfg(windows)]
+        hook_func!(
+            None,
+            GlobalUnlock,
+            (handle: *mut c_void),
+            i32
+        );
+        
+        #[cfg(windows)]
+        hook_func!(
+            None,
+            CreateStreamOnHGlobal,
+            (handle: *mut c_void, fDeleteOnRelease: i32, ppstm: *mut c_void), 
+            i32
+        );
+    
+
+            #[cfg(windows)]
         hook_func!(
             Some("ntdll"),
             RtlAllocateHeap,
             (handle: *mut c_void, flags: u32, size: usize),
             *mut c_void
         );
+
         #[cfg(windows)]
         hook_func!(
-            Some("kernel32"),
-            HeapReAlloc,
+            Some("ntdll"),
+            RtlReAllocateHeap,
             (
                 handle: *mut c_void,
                 flags: u32,
@@ -727,6 +829,7 @@ impl AsanRuntime {
             ),
             *mut c_void
         );
+        
         #[cfg(windows)]
         hook_func_with_check!(
             Some("ntdll"),
@@ -734,6 +837,7 @@ impl AsanRuntime {
             (handle: *mut c_void, flags: u32, ptr: *mut c_void),
             bool
         );
+
         #[cfg(windows)]
         hook_func_with_check!(
             Some("ntdll"),
@@ -1106,6 +1210,10 @@ impl AsanRuntime {
     #[allow(clippy::cast_sign_loss)]
     #[allow(clippy::too_many_lines)]
     extern "system" fn handle_trap(&mut self) {
+        log::error!(" ATTACH A DEBUGGER WITHING A MINUTE to pid {}", std::process::id());
+        std::thread::sleep(std::time::Duration::from_secs(60));
+
+        log::info!("handle_trap");       
         self.hooks_enabled = false;
         self.dump_registers();
 
@@ -1165,7 +1273,7 @@ impl AsanRuntime {
                 _ => None,
             };
 
-            // log::trace!("{:x}", base_value);
+            // log::info!("{:x}", base_value);
             #[allow(clippy::option_if_let_else)]
             let error = if fault_address >= stack_start && fault_address < stack_end {
                 match access_type {
@@ -1764,8 +1872,28 @@ impl AsanRuntime {
         self.blob_check_mem_dword = Some(self.generate_shadow_check_blob(3));
         self.blob_check_mem_qword = Some(self.generate_shadow_check_blob(4));
         self.blob_check_mem_16bytes = Some(self.generate_shadow_check_blob(5));
+        Self::print_blob("blob_report", &self.blob_report);
+        Self::print_blob("blob_check_mem_byte", &self.blob_check_mem_byte);
+        Self::print_blob("blob_check_mem_halfword", &self.blob_check_mem_halfword);
+        Self::print_blob("blob_check_mem_dword", &self.blob_check_mem_dword);
+        Self::print_blob("blob_check_mem_qword", &self.blob_check_mem_qword);
+        Self::print_blob("blob_check_mem_16bytes", &self.blob_check_mem_16bytes);
     }
 
+    // Print the name of the blob, its start address and end address
+    fn print_blob(name: &str, blob: &Option<Box<[u8]>>) {
+        match blob {
+            Some(b) => {
+                let start_address = b.as_ptr() as usize;
+                // The end address is calculated as the start address plus the length of the blob.
+                // Since we want the address of the last element, we subtract 1 from the length.
+                let end_address = start_address + b.len() - 1;
+                log::info!("{}: {:#X} - {:#X} ", name, start_address, end_address);
+            },
+            None => println!("{}:  No blob data", name),
+        }
+    }
+    
     ///
     /// Generate the instrumentation blobs for the current arch.
     #[cfg(target_arch = "aarch64")]
@@ -2075,7 +2203,7 @@ impl AsanRuntime {
             if let X86Operand(x86operand) = operand {
                 if let X86OperandType::Mem(opmem) = x86operand.op_type {
                     /*
-                    log::trace!(
+                    log::info!(
                         "insn: {:#?} {:#?} width: {}, segment: {:#?}, base: {:#?}, index: {:#?}, scale: {}, disp: {}",
                         insn_id,
                         instr,

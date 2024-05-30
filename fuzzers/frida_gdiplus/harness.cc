@@ -32,6 +32,7 @@ extern "C" __declspec(dllexport) int LLVMFuzzerTestOneInput(const uint8_t *data,
                                                             size_t size) {
   static DWORD init = 0;
   if (!init) {
+    gdiplusStartupInput.SuppressBackgroundThread = TRUE;
     GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
     init = 1;
   }

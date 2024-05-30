@@ -26,14 +26,41 @@ use libafl_targets::drcov::DrCovBasicBlock;
 use nix::sys::mman::{mmap, MapFlags, ProtFlags};
 use rangemap::RangeMap;
 
+
+
 #[cfg(all(feature = "cmplog", target_arch = "aarch64"))]
 use crate::cmplog_rt::CmpLogRuntime;
 use crate::{asan::asan_rt::AsanRuntime, coverage_rt::CoverageRuntime, drcov_rt::DrCovRuntime, hook_rt::HookRuntime};
+use std::fs::File;
+// use std::io::Write;
+use std::sync::Mutex;
 
 #[cfg(target_vendor = "apple")]
 const ANONYMOUS_FLAG: MapFlags = MapFlags::MAP_ANON;
 #[cfg(not(any(target_vendor = "apple", target_os = "windows")))]
 const ANONYMOUS_FLAG: MapFlags = MapFlags::MAP_ANONYMOUS;
+
+
+
+lazy_static::lazy_static! {
+    static ref FILE_HANDLE: Mutex<Option<File>> = Mutex::new(None);
+}
+
+// fn write_to_file(message: &str) {
+//     let pid = std::process::id();
+//     let file_name = format!("output_{}.txt", pid);
+
+//     let mut file_handle = FILE_HANDLE.lock().unwrap();
+
+//     if file_handle.is_none() {
+//         let file = File::create(&file_name).expect("Failed to create file");
+//         *file_handle = Some(file);
+//     }
+
+//     if let Some(ref mut file) = *file_handle {
+//         file.write_all(message.as_bytes()).expect("Failed to write to file");
+//     }
+// }
 
 /// The Runtime trait
 pub trait FridaRuntime: 'static + Debug {
@@ -310,6 +337,7 @@ impl FridaInstrumentationHelperBuilder {
             }
         }
 
+        log::info!("FridaInstrumentationHelper ranges{:?}", ranges.borrow_mut());
         let transformer = FridaInstrumentationHelper::build_transformer(gum, &ranges, &runtimes);
 
         #[cfg(unix)]
@@ -502,6 +530,23 @@ where
             if ranges.borrow().contains_key(&(address as usize)) {
                 let mut runtimes = (*runtimes).borrow_mut();
                 if first {
+                    // let first_block_trans = output.writer().pc() / 4096 * 4096;
+                    // let prot_page_start = first_block_trans + 0xd000;
+
+                    // // Change memory protection to read-only
+                    // let mut old_protect = 0;
+                    // let prot_len = 4096;
+                    // let result = unsafe{
+                    //     VirtualProtect(prot_page_start as *mut c_void, prot_len, PAGE_READONLY, &mut old_protect)
+                    // };
+
+                    // if result == 0 {
+                    //     log::error!("Failed to change memory protection. Error {}",  unsafe{GetLastError()});
+                    // }
+                    // else{
+                    //     log::info!("Protected {} bytes at {:x}-{:x}", prot_len, prot_page_start, prot_page_start + prot_len as u64);
+                    // }
+
                     first = false;
                     log::info!(
                         "block @ {:x} transformed to {:x}",
@@ -509,7 +554,17 @@ where
                         output.writer().pc()
                     );
                     if let Some(rt) = runtimes.match_first_type_mut::<CoverageRuntime>() {
+                        log::info!(
+                            "emitting coverage info for {:x} at {:x}",
+                            address,
+                            output.writer().pc()
+                        );
                         rt.emit_coverage_mapping(address, output);
+                        log::info!(
+                            "emitted coverage info for {:x} until {:x}",
+                            address,
+                            output.writer().pc()
+                        );
                     }
                     if let Some(_rt) = runtimes.match_first_type_mut::<DrCovRuntime>() {
                         basic_block_start = address;
@@ -519,7 +574,17 @@ where
 
                 if let Some(rt) = runtimes.match_first_type_mut::<HookRuntime>() {
                     if let Some(call_target) = rt.is_interesting(capstone, instr) {
+                        log::info!(
+                            "emitting callout for {:x} at {:x}",
+                            address,
+                            output.writer().pc()
+                        );
                         rt.emit_callout(call_target, &instruction);
+                        log::info!(
+                            "emitting callout for {:x} until {:x}",
+                            address,
+                            output.writer().pc()
+                        );
                         keep_instr = false;
                     }
                 }
@@ -533,6 +598,11 @@ where
                 #[cfg(target_arch = "x86_64")]
                 if let Some((segment, width, basereg, indexreg, scale, disp)) = res {
                     if let Some(rt) = runtimes.match_first_type_mut::<AsanRuntime>() {
+                        log::info!(
+                            "emitting shadow_check for {:x} at {:x}",
+                            address,
+                            output.writer().pc()
+                        );
                         rt.emit_shadow_check(
                             address,
                             output,
@@ -542,6 +612,11 @@ where
                             indexreg,
                             scale,
                             disp.try_into().unwrap(),
+                        );
+                        log::info!(
+                            "emitted shadow_check for {:x} until {:x}",
+                            address,
+                            output.writer().pc()
                         );
                     }
                 }
@@ -585,7 +660,14 @@ where
 
             }
             if keep_instr {
-            instruction.keep();
+                // let instr_size = instr.bytes().len();
+                // let address = instr.address();
+    
+                // // log::info!("keeping instruction at {:x} with size {}", address, instr_size);
+
+                // // disasm(address, 15, 1);
+                // write_to_file(format!("Keep {:x} as {:x}\n", address, output.writer().pc()).as_str());
+                instruction.keep();
             }
         }
         if basic_block_size != 0 {
@@ -694,3 +776,21 @@ where
         (*self.ranges).borrow_mut()
     }
 }
+
+// fn disasm(code_start: u64, code_len: usize, instr_count :usize) {
+//     let cs = Capstone::new()
+//         .x86() // Specify the architecture (e.g., x86, arm, mips, etc.)
+//         .mode(arch::x86::ArchMode::Mode64) // Specify the mode (e.g., 32-bit or 64-bit for x86)
+//         .build()
+//         .expect("Failed to create Capstone object");
+
+//     let prot_page_start_ptr = code_start as *const u8;
+//     let insns = unsafe {
+//         std::slice::from_raw_parts(prot_page_start_ptr, code_len)
+//     };
+//     let insns = cs.disasm_count(insns, code_start, instr_count).unwrap();
+
+//     insns.iter().for_each(|i| {
+//         log::info!("0x{:x}: {:6} {}", i.address(), i.mnemonic().unwrap_or(""), i.op_str().unwrap_or(""));
+//     });
+// }

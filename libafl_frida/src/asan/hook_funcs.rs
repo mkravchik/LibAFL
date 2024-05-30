@@ -1,16 +1,21 @@
 //! The allocator hooks for address sanitizer.
-use std::ffi::c_void;
+use std::ffi::{c_void, c_ulong, c_long};
 
 use backtrace::Backtrace;
 use libc::{c_char, wchar_t};
 
+
+
+
 use crate::{
-    alloc::Allocator,
     asan::{
         asan_rt::AsanRuntime,
         errors::{AsanError, AsanErrors},
     },
 };
+
+
+use std::os::raw::c_uint;
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 impl AsanRuntime {
@@ -18,7 +23,7 @@ impl AsanRuntime {
     #[allow(non_snake_case)]
     #[cfg(windows)]
     pub fn hook_CreateThread(&mut self, thread_attributes: *const c_void, stack_size: usize, start_address: *const c_void, parameter: *const c_void, creation_flags: i32, thread_id: *mut i32) -> usize {
-
+        //log::info!("hook_CreateThread");
         extern "system" {
             fn CreateThread(thread_attributes: *const c_void, stack_size: usize, start_address: *const c_void, parameter: *const c_void, creation_flags: i32, thread_id: *mut i32) -> usize;
         }
@@ -28,6 +33,7 @@ impl AsanRuntime {
     #[allow(non_snake_case)]
     #[cfg(windows)]
     pub fn hook_CreateFileMappingW(&mut self, file: usize, file_mapping_attributes: *const c_void, protect: i32, maximum_size_high: u32, maximum_size_low: u32, name: *const c_void) -> usize {
+        //log::info!("hook_CreateFileMappingW");
         extern "system" {
             fn CreateFileMappingW(file: usize, file_mapping_attributes: *const c_void, protect: i32, maximum_size_high: u32, maximum_size_low: u32, name: *const c_void) -> usize;
         }
@@ -38,7 +44,7 @@ impl AsanRuntime {
     #[allow(non_snake_case)]
     #[cfg(windows)]
     pub fn hook_LdrLoadDll(&mut self, path: *const c_void, file: usize, flags: usize, x: usize) -> usize {
-
+        //log::info!("hook_LdrLoadDll");
         extern "system" {
         fn LdrLoadDll(path: *const c_void, file: usize, flags: usize, x: usize)-> usize;
         }
@@ -50,7 +56,8 @@ impl AsanRuntime {
     #[inline]
     #[allow(non_snake_case)]
     #[cfg(windows)]
-    pub fn hook_LdrpCallInitRoutine(&mut self, base_address: *const c_void, reason: usize, context: usize, entry_point: usize) -> usize {
+    pub fn hook_LdrpCallInitRoutine(&mut self, _base_address: *const c_void, _reason: usize, _context: usize, _entry_point: usize) -> usize {
+        //log::info!("hook_LdrpCallInitRoutine");
         winsafe::OutputDebugString("LdrpCallInitRoutine");
         // let result = unsafe { LdrLoadDll(path, file, flags,x )};
         // self.allocator_mut().unpoison_all_existing_memory();
@@ -63,7 +70,7 @@ impl AsanRuntime {
     pub fn hook_LoadLibraryExW(&mut self, path: *const c_void, file: usize, flags: i32) -> usize {
 
         extern "system" {
-        fn LoadLibraryExW(path: *const c_void, file: usize, flags: i32)-> usize;
+            fn LoadLibraryExW(path: *const c_void, file: usize, flags: i32)-> usize;
         }
         log::warn!("LoadLibraryW");
         let result = unsafe { LoadLibraryExW(path, file, flags)};
@@ -71,11 +78,262 @@ impl AsanRuntime {
         result
     }
     
+
+    //HGLOBAL __stdcall GlobalAlloc(UINT uFlags, SIZE_T dwBytes)
     #[inline]
     #[allow(non_snake_case)]
     #[cfg(windows)]
-    pub fn hook_RtlAllocateHeap(&mut self, _handle: *mut c_void, flags: u32, size: usize) -> *mut c_void {
-        // log::trace!("{:?}: HeapAlloc({:?}, {:}, {:x})", std::thread::current().id(),_handle, flags, size);
+    pub fn hook_GlobalAlloc(
+        &mut self,
+        flags: c_uint,
+        size: usize,
+    ) -> *mut c_void {
+        log::info!("hook_GlobalAlloc flags {:x} and size {:x}", flags, size);
+        extern "system" {
+            fn GlobalAlloc(
+                flags: c_uint,
+                size: usize,
+            ) -> *mut c_void;
+        }
+        let res; // = std::ptr::null_mut();//unsafe { GlobalAlloc(flags, size) };
+        if flags & 0x0002 == 0x0002 { // GMEM_MOVEABLE - returns a handle, not a pointer.
+            res = unsafe { GlobalAlloc(flags, size) };
+        }
+        else{
+            res = unsafe { self.allocator_mut().alloc(size, 8) };
+            if flags & 0x0040 == 0x0040 {
+                extern "system" {
+                    fn memset(s: *mut c_void, c: i32, n: usize) -> *mut c_void;
+                }
+                unsafe {
+                    memset(res, 0, size);
+                }
+            }
+        }
+        log::info!("{:?}: hook_GlobalAlloc returns {:p}", std::thread::current().id(), res);
+
+        res
+    }
+
+
+    #[inline]
+    #[allow(non_snake_case)]
+    #[cfg(windows)]
+    pub fn hook_GlobalFree(
+        &mut self,
+        ptr: *mut c_void
+    ) -> *mut c_void {
+        log::info!("hook_GlobalFree for {:p}", ptr);
+        let mut res = std::ptr::null_mut();
+        
+        if self.allocator().is_managed(ptr) {
+            unsafe {
+                self.allocator_mut().release(ptr);
+            }
+        }
+        else{
+            extern "system" {
+                fn GlobalFree(
+                    ptr: *mut c_void
+                ) -> *mut c_void;
+            }
+            res = unsafe { GlobalFree(ptr) };
+        }
+
+        log::info!("{:?}: hook_GlobalFree returns {:p}", std::thread::current().id(), res);
+        res
+    }
+
+    #[inline]
+    #[allow(non_snake_case)]
+    #[cfg(windows)]
+    pub fn hook_GlobalLock(
+        &mut self,
+        handle: *mut c_void
+    ) -> *mut c_void {
+        log::info!("hook_GlobalLock for {:p}", handle);
+        let res ; //= std::ptr::null_mut();
+        
+        extern "system" {
+            fn GlobalLock(
+                ptr: *mut c_void
+            ) -> *mut c_void;
+        }
+        res = unsafe { GlobalLock(handle) };
+
+        log::info!("{:?}: hook_GlobalLock returns {:p}", std::thread::current().id(), res);
+        res
+    }
+
+    #[inline]
+    #[allow(non_snake_case)]
+    #[cfg(windows)]
+    pub fn hook_GlobalUnlock(
+        &mut self,
+        handle: *mut c_void
+    ) -> i32 {
+        log::info!("hook_GlobalUnlock for {:p}", handle);
+        let res; // = 0;
+        
+        extern "system" {
+            fn GlobalUnlock(
+                ptr: *mut c_void
+            ) -> i32;
+        }
+        res = unsafe { GlobalUnlock(handle) };
+
+        log::info!("{:?}: hook_GlobalUnlock returns {:?}", std::thread::current().id(), res);
+        res
+    }
+
+
+    #[inline]
+    #[allow(non_snake_case)]
+    #[cfg(windows)]
+    pub fn hook_CreateStreamOnHGlobal(
+        &mut self,
+        handle: *mut c_void,
+        fDeleteOnRelease: i32,
+        ppstm: *mut c_void 
+    ) -> i32 {
+        log::info!("hook_CreateStreamOnHGlobal for {:p}", handle);
+        let res;
+        
+        extern "system" {
+            fn CreateStreamOnHGlobal(
+                handle: *mut c_void,
+                fDeleteOnRelease: i32,
+                ppstm: *mut c_void 
+            ) -> i32;
+        }
+        res = unsafe { CreateStreamOnHGlobal(handle, fDeleteOnRelease, ppstm) };
+
+        log::info!("{:?}: hook_CreateStreamOnHGlobal returns {:?}", std::thread::current().id(), res);
+        res
+    }
+   
+    #[inline]
+    #[allow(non_snake_case)]
+    #[cfg(windows)]
+    pub fn hook_NtAllocateVirtualMemory(
+        &mut self,
+        ProcessHandle: *mut c_void,
+        BaseAddress: *mut *mut c_void,
+        ZeroBits: usize,
+        RegionSize: *mut usize,
+        AllocationType: c_ulong,
+        Protect: c_ulong,
+    ) -> c_long {
+        unsafe{log::info!("hook_NtAllocateVirtualMemory for base {:x} and size {:x}", *BaseAddress as usize,
+        *RegionSize);}
+        extern "system" {
+            fn NtAllocateVirtualMemory(
+                ProcessHandle: *mut c_void,
+                BaseAddress: *mut *mut c_void,
+                ZeroBits: usize,
+                RegionSize: *mut usize,
+                AllocationType: c_ulong,
+                Protect: c_ulong,
+            ) -> c_long;
+        }
+        let res = unsafe { NtAllocateVirtualMemory(ProcessHandle, BaseAddress,
+            ZeroBits, RegionSize, AllocationType, Protect) };
+        unsafe{log::info!("NtAllocateVirtualMemory, returned {:x}", *BaseAddress as usize);}
+        if res != -1 {
+            unsafe {
+                self.allocator_mut()
+                    .map_shadow_for_region(*BaseAddress as usize, 
+                        *BaseAddress as usize + *RegionSize, true);
+            }
+        }
+        res
+    }
+
+    #[inline]
+    #[allow(non_snake_case)]
+    #[cfg(windows)]
+    pub fn hook_NtAllocateVirtualMemoryEx(
+        &mut self,
+        ProcessHandle: *mut c_void,
+        BaseAddress: *mut *mut c_void,
+        RegionSize: *mut usize,
+        AllocationType: c_ulong,
+        Protect: c_ulong,
+        ExtendedParameters: *mut c_void,
+        ParameterCount: c_ulong
+    ) -> c_long {
+        unsafe{log::info!("hook_NtAllocateVirtualMemoryEx for base {:x} and size {:x}", *BaseAddress as usize,
+        *RegionSize);}
+        extern "system" {
+            fn NtAllocateVirtualMemoryEx(
+                ProcessHandle: *mut c_void,
+                BaseAddress: *mut *mut c_void,
+                RegionSize: *mut usize,
+                AllocationType: c_ulong,
+                Protect: c_ulong,
+                ExtendedParameters: *mut c_void,
+                ParameterCount: c_ulong
+            ) -> c_long;
+        }
+        let res = unsafe { NtAllocateVirtualMemoryEx(ProcessHandle, BaseAddress,
+            RegionSize, AllocationType, Protect, ExtendedParameters, ParameterCount) };
+        unsafe{log::info!("NtAllocateVirtualMemoryEx, returned {:x}", *BaseAddress as usize);}
+        if res != -1 {
+            unsafe {
+                self.allocator_mut()
+                    .map_shadow_for_region(*BaseAddress as usize, 
+                        *BaseAddress as usize + *RegionSize, true);
+            }
+        }
+        res
+    }
+
+    /// NTSTATUS (__stdcall *NtFreeVirtualMemory)(HANDLE ProcessHandle, PVOID *BaseAddress, PSIZE_T RegionSize, ULONG FreeType)
+    #[inline]
+    #[allow(non_snake_case)]
+    #[cfg(windows)]
+    pub fn hook_NtFreeVirtualMemory(
+        &mut self,
+        ProcessHandle: *mut c_void,
+        BaseAddress: *mut *mut c_void,
+        RegionSize: *mut usize,
+        FreeType: c_ulong
+    ) -> c_long {
+        unsafe{log::info!("hook_NtFreeVirtualMemory for base {:x} and size {:x}, free type {:x}",
+         *BaseAddress as usize, *RegionSize, FreeType);}
+        extern "system" {
+            fn NtFreeVirtualMemory(
+                ProcessHandle: *mut c_void,
+                BaseAddress: *mut *mut c_void,
+                RegionSize: *mut usize,
+                FreeType: c_ulong
+            ) -> c_long;
+        }
+        let res: i32 = unsafe { NtFreeVirtualMemory(ProcessHandle, BaseAddress,
+            RegionSize, FreeType) };
+        log::info!("hook_NtFreeVirtualMemory, returned {:?}", res);
+        if res != -1 {
+            unsafe {
+                // TODO -take care of the case when the passed address is 0 (means free everything allocated)
+                // TODO - consider different free types
+                // [in] dwSize
+                // The size of the region of memory to be freed, in bytes.
+                // If the dwFreeType parameter is MEM_RELEASE, this parameter must be 0 (zero). The function
+                // frees the entire region that is reserved in the initial allocation call to VirtualAlloc.
+                // If the dwFreeType parameter is MEM_DECOMMIT, the function decommits all memory pages that
+                // contain one or more bytes in the range from the lpAddress parameter to (lpAddress+dwSize).
+                self.allocator_mut().poison_shadow(*BaseAddress, false);
+            }
+        }
+        res
+    
+    }
+
+    #[inline]
+    #[allow(non_snake_case)]
+    #[cfg(windows)]
+    pub fn hook_RtlAllocateHeap(&mut self, handle: *mut c_void, flags: u32, size: usize) -> *mut c_void {
+        log::info!("{:?}: hook_RtlAllocateHeap({:p}, {:x}, {:x})", std::thread::current().id(), handle, flags, size);
         let ret = unsafe { self.allocator_mut().alloc(size, 8) };
         if flags & 8 == 8 {
             extern "system" {
@@ -88,30 +346,51 @@ impl AsanRuntime {
         if flags & 4 == 4 && ret == std::ptr::null_mut() {
             unimplemented!();
         }
+        log::info!("{:?}: hook_RtlAllocateHeap returns {:p}", std::thread::current().id(), ret);
+        // if size == 0x1ab {
+            // let mut old_protect = 0;
+            // let prot_len: usize = 4096;
+            // let prot_page_start = ret as usize & !0xfff - prot_len;
+            // let result = unsafe {
+            //     VirtualProtect(ret as *mut c_void, prot_len, PAGE_NOACCESS, &mut old_protect)
+            // };
+
+            // if result == 0 {
+            //     log::error!("Failed to change memory protection. Error {}", unsafe { GetLastError() });
+            // } else {
+            //     log::info!(
+            //         "Protected {} bytes at {:x}-{:x}",
+            //         prot_len,
+            //         prot_page_start,
+            //         prot_page_start + prot_len
+            //     );
+            // }
+            // log::error!(" ATTACH A DEBUGGER WITHING A MINUTE to pid {}", std::process::id());
+            // std::thread::sleep(std::time::Duration::from_secs(60));
+        // }
         ret
     }
+
     #[inline]
     #[allow(non_snake_case)]
     #[cfg(windows)]
-    pub fn hook_HeapReAlloc(
-        &mut self,
-        handle: *mut c_void,
-        flags: u32,
-        ptr: *mut c_void,
-        size: usize,
-    ) -> *mut c_void {
-        // log::trace!("{:?}: HeapReAlloc({:?}, {:}, {:?}, {:x})", std::thread::current().id(), handle, flags, ptr, size);
+    pub fn hook_RtlReAllocateHeap(&mut self, handle: *mut c_void, flags: u32, ptr: *mut c_void, size: usize) -> *mut c_void {
+        log::info!("{:?}: hook_RtlReAllocateHeap({:p}, {:x}, {:p}, {:x})", std::thread::current().id(), handle, flags, ptr, size);
+        // let ret = hook_HeapReAlloc(handle, flags, ptr, size);
+
         let allocator = self.allocator_mut();
         if !allocator.is_managed(ptr) {
             extern "system" {
-                fn HeapReAlloc(
+                fn RtlReAllocateHeap(
                     handle: *mut c_void,
                     flags: u32,
                     ptr: *mut c_void,
                     size: usize,
                 ) -> *mut c_void;
             }
-            return unsafe { HeapReAlloc(handle, flags, ptr, size) };
+            let ret = unsafe { RtlReAllocateHeap(handle, flags, ptr, size) };
+            log::info!("hook_RtlReAllocateHeap returns {:p}", ret);
+            return ret;
         }
         let ret = unsafe {
             let ret = allocator.alloc(size, 8);
@@ -120,6 +399,8 @@ impl AsanRuntime {
             }
             memcpy(ret as *mut c_void, ptr, allocator.get_usable_size(ptr));
             allocator.release(ptr);
+
+            log::info!("hook_RtlReAllocateHeap returns {:p}", ret);
             ret
         };
 
@@ -137,8 +418,12 @@ impl AsanRuntime {
         if flags & 0x10 == 0x10 && ret != ptr {
             unimplemented!();
         }
+
+
+        log::info!("hook_RtlAllocateHeap returns {:p}", ret);
         ret
     }
+
     #[inline]
     #[allow(non_snake_case)]
     #[cfg(windows)]
@@ -148,13 +433,15 @@ impl AsanRuntime {
         _flags: u32,
         ptr: *mut c_void,
     ) -> bool {
+        log::info!("hook_check_RtlFreeHeap({:p}, {:x}, {:p})", _handle, _flags, ptr); // too many
         self.allocator_mut().is_managed(ptr)
     }
     #[inline]
     #[allow(non_snake_case)]
     #[cfg(windows)]
-    pub fn hook_RtlFreeHeap(&mut self, _handle: *mut c_void, _flags: u32, ptr: *mut c_void) -> bool {
-        // log::trace!("{:?}: HeapFree({:?}, {:}, {:?})",std::thread::current().id(), handle, flags, ptr);
+    pub fn hook_RtlFreeHeap(&mut self, handle: *mut c_void, flags: u32, ptr: *mut c_void) -> bool {
+            //log::info!("hook_RtlFreeHeap");
+            log::info!("{:?}: hook_RtlFreeHeap({:p}, {:x}, {:p})",std::thread::current().id(), handle, flags, ptr);
             unsafe { self.allocator_mut().release(ptr) };
             true
     }
@@ -167,12 +454,14 @@ impl AsanRuntime {
         _flags: u32,
         ptr: *mut c_void,
     ) -> bool {
+        log::info!("{:?} hook_check_RtlSizeHeap{:p}, {:x}, {:p})",std::thread::current().id(), _handle, _flags, ptr);
         self.allocator_mut().is_managed(ptr)
     }
 
     #[allow(non_snake_case)]
     #[cfg(windows)]
-    pub fn hook_RtlSizeHeap(&mut self, _handle: *mut c_void, _flags: u32, ptr: *mut c_void) -> usize {
+    pub fn hook_RtlSizeHeap(&mut self, handle: *mut c_void, flags: u32, ptr: *mut c_void) -> usize {
+        log::info!("{:?} hook_RtlSizeHeap{:p}, {:x}, {:p})",std::thread::current().id(), handle, flags, ptr);
         self.allocator().get_usable_size(ptr)
     }
     #[inline]
@@ -184,6 +473,7 @@ impl AsanRuntime {
         _flags: u32,
         ptr: *mut c_void,
     ) -> bool {
+        log::info!("{:?} hook_check_RtlValidateHeap{:p}, {:x}, {:p})",std::thread::current().id(), _handle, _flags, ptr);
         self.allocator_mut().is_managed(ptr)
     }
 
@@ -191,21 +481,23 @@ impl AsanRuntime {
     #[cfg(windows)]
     pub fn hook_RtlValidateHeap(
         &mut self,
-        _handle: *mut c_void,
-        _flags: u32,
-        _ptr: *mut c_void,
+        handle: *mut c_void,
+        flags: u32,
+        ptr: *mut c_void,
     ) -> bool {
+        log::info!("{:?} hook_RtlValidateHeap{:p}, {:x}, {:p})",std::thread::current().id(), handle, flags, ptr);
         true
     }
     #[inline]
     pub fn hook_malloc(&mut self, size: usize) -> *mut c_void {
-        log::trace!("hook: malloc({:x})", size);
+        //log::info!("hook: malloc({:x})", size);
         unsafe { self.allocator_mut().alloc(size, 8) }
     }
 
     #[allow(non_snake_case)]
     #[inline]
     pub fn hook__Znam(&mut self, size: usize) -> *mut c_void {
+        //log::info!("hook__Znam");
         unsafe { self.allocator_mut().alloc(size, 8) }
     }
 
@@ -216,12 +508,14 @@ impl AsanRuntime {
         size: usize,
         _nothrow: *const c_void,
     ) -> *mut c_void {
+        //log::info!("hook__ZnamRKSt9nothrow_t");
         unsafe { self.allocator_mut().alloc(size, 8) }
     }
 
     #[allow(non_snake_case)]
     #[inline]
     pub fn hook__ZnamSt11align_val_t(&mut self, size: usize, alignment: usize) -> *mut c_void {
+        //log::info!("hook__ZnamSt11align_val_t");
         unsafe { self.allocator_mut().alloc(size, alignment) }
     }
 
@@ -233,12 +527,14 @@ impl AsanRuntime {
         alignment: usize,
         _nothrow: *const c_void,
     ) -> *mut c_void {
+        //log::info!("hook__ZnamSt11align_val_tRKSt9nothrow_t");
         unsafe { self.allocator_mut().alloc(size, alignment) }
     }
 
     #[allow(non_snake_case)]
     #[inline]
     pub fn hook__Znwm(&mut self, size: usize) -> *mut c_void {
+        //log::info!("hook__Znwm");        
         let result = unsafe { self.allocator_mut().alloc(size, 8) };
         if result.is_null() {
             extern "system" {
@@ -261,12 +557,14 @@ impl AsanRuntime {
         size: usize,
         _nothrow: *const c_void,
     ) -> *mut c_void {
+        //log::info!("hook__ZnwmRKSt9nothrow_t");        
         unsafe { self.allocator_mut().alloc(size, 8) }
     }
 
     #[allow(non_snake_case)]
     #[inline]
     pub fn hook__ZnwmSt11align_val_t(&mut self, size: usize, alignment: usize) -> *mut c_void {
+        //log::info!("hook__ZnwmSt11align_val_t");
         let result = unsafe { self.allocator_mut().alloc(size, alignment) };
         if result.is_null() {
             extern "system" {
@@ -288,11 +586,13 @@ impl AsanRuntime {
         alignment: usize,
         _nothrow: *const c_void,
     ) -> *mut c_void {
+        //log::info!("hook__ZnwmSt11align_val_tRKSt9nothrow_t");        
         unsafe { self.allocator_mut().alloc(size, alignment) }
     }
 
     #[inline]
     pub fn hook_calloc(&mut self, nmemb: usize, size: usize) -> *mut c_void {
+        //log::info!("hook_calloc");  
         extern "system" {
             fn memset(s: *mut c_void, c: i32, n: usize) -> *mut c_void;
         }
@@ -306,6 +606,7 @@ impl AsanRuntime {
     #[inline]
     #[allow(clippy::cmp_null)]
     pub fn hook_realloc(&mut self, ptr: *mut c_void, size: usize) -> *mut c_void {
+        //log::info!("hook_realloc");  
         unsafe {
             let ret = self.allocator_mut().alloc(size, 0x8);
             if ptr != std::ptr::null_mut() && ret != std::ptr::null_mut() {
@@ -320,13 +621,15 @@ impl AsanRuntime {
 
     #[inline]
     pub fn hook_check_free(&mut self, ptr: *mut c_void) -> bool {
+        //log::info!("hook_check_free");  
         self.allocator_mut().is_managed(ptr)
     }
 
     #[inline]
     #[allow(clippy::cmp_null)]
     pub fn hook_free(&mut self, ptr: *mut c_void) {
-        // log::trace!("hook: free({:x})", ptr as usize);
+        //log::info!("hook_free");  
+        // log::info!("hook: free({:x})", ptr as usize);
         if ptr != std::ptr::null_mut() {
             unsafe { self.allocator_mut().release(ptr) }
         }
@@ -335,6 +638,7 @@ impl AsanRuntime {
     #[cfg(not(target_vendor = "apple"))]
     #[inline]
     pub fn hook_memalign(&mut self, alignment: usize, size: usize) -> *mut c_void {
+        //log::info!("hook_memalign");  
         unsafe { self.allocator_mut().alloc(size, alignment) }
     }
 
@@ -345,6 +649,7 @@ impl AsanRuntime {
         alignment: usize,
         size: usize,
     ) -> i32 {
+        //log::info!("hook_posix_memalign");         
         unsafe {
             *pptr = self.allocator_mut().alloc(size, alignment);
         }
@@ -354,6 +659,7 @@ impl AsanRuntime {
     #[inline]
     #[cfg(not(target_vendor = "apple"))]
     pub fn hook_malloc_usable_size(&mut self, ptr: *mut c_void) -> usize {
+        //log::info!("hook_malloc_usable_size"); 
         self.allocator_mut().get_usable_size(ptr)
     }
 
@@ -361,6 +667,7 @@ impl AsanRuntime {
     #[allow(clippy::cmp_null)]
     #[inline]
     pub fn hook__ZdaPv(&mut self, ptr: *mut c_void) {
+        //log::info!("hook__ZdaPv"); 
         if ptr != std::ptr::null_mut() {
             unsafe { self.allocator_mut().release(ptr) }
         }
@@ -370,6 +677,7 @@ impl AsanRuntime {
     #[allow(clippy::cmp_null)]
     #[inline]
     pub fn hook__ZdaPvm(&mut self, ptr: *mut c_void, _ulong: u64) {
+        //log::info!("hook__ZdaPvm"); 
         if ptr != std::ptr::null_mut() {
             unsafe { self.allocator_mut().release(ptr) }
         }
@@ -384,6 +692,7 @@ impl AsanRuntime {
         _ulong: u64,
         _alignment: usize,
     ) {
+        //log::info!("hook__ZdaPvmSt11align_val_t"); 
         if ptr != std::ptr::null_mut() {
             unsafe { self.allocator_mut().release(ptr) }
         }
@@ -393,6 +702,7 @@ impl AsanRuntime {
     #[allow(clippy::cmp_null)]
     #[inline]
     pub fn hook__ZdaPvRKSt9nothrow_t(&mut self, ptr: *mut c_void, _nothrow: *const c_void) {
+        //log::info!("hook__ZdaPvRKSt9nothrow_t"); 
         if ptr != std::ptr::null_mut() {
             unsafe { self.allocator_mut().release(ptr) }
         }
@@ -407,6 +717,7 @@ impl AsanRuntime {
         _alignment: usize,
         _nothrow: *const c_void,
     ) {
+        //log::info!("hook__ZdaPvSt11align_val_tRKSt9nothrow_t"); 
         if ptr != std::ptr::null_mut() {
             unsafe { self.allocator_mut().release(ptr) }
         }
@@ -416,6 +727,7 @@ impl AsanRuntime {
     #[allow(clippy::cmp_null)]
     #[inline]
     pub fn hook__ZdaPvSt11align_val_t(&mut self, ptr: *mut c_void, _alignment: usize) {
+        //log::info!("hook__ZdaPvSt11align_val_t");         
         if ptr != std::ptr::null_mut() {
             unsafe { self.allocator_mut().release(ptr) }
         }
@@ -425,6 +737,7 @@ impl AsanRuntime {
     #[allow(clippy::cmp_null)]
     #[inline]
     pub fn hook__ZdlPv(&mut self, ptr: *mut c_void) {
+        //log::info!("hook__ZdlPv");   
         if ptr != std::ptr::null_mut() {
             unsafe { self.allocator_mut().release(ptr) }
         }
@@ -434,6 +747,7 @@ impl AsanRuntime {
     #[allow(clippy::cmp_null)]
     #[inline]
     pub fn hook__ZdlPvm(&mut self, ptr: *mut c_void, _ulong: u64) {
+        //log::info!("hook__ZdlPvm");   
         if ptr != std::ptr::null_mut() {
             unsafe { self.allocator_mut().release(ptr) }
         }
@@ -448,6 +762,7 @@ impl AsanRuntime {
         _ulong: u64,
         _alignment: usize,
     ) {
+        //log::info!("hook__ZdlPvmSt11align_val_t");   
         if ptr != std::ptr::null_mut() {
             unsafe { self.allocator_mut().release(ptr) }
         }
@@ -457,6 +772,7 @@ impl AsanRuntime {
     #[allow(clippy::cmp_null)]
     #[inline]
     pub fn hook__ZdlPvRKSt9nothrow_t(&mut self, ptr: *mut c_void, _nothrow: *const c_void) {
+        //log::info!("hook__ZdlPvRKSt9nothrow_t");   
         if ptr != std::ptr::null_mut() {
             unsafe { self.allocator_mut().release(ptr) }
         }
@@ -471,6 +787,7 @@ impl AsanRuntime {
         _alignment: usize,
         _nothrow: *const c_void,
     ) {
+        //log::info!("hook__ZdlPvSt11align_val_tRKSt9nothrow_t");   
         if ptr != std::ptr::null_mut() {
             unsafe { self.allocator_mut().release(ptr) }
         }
@@ -480,6 +797,7 @@ impl AsanRuntime {
     #[allow(clippy::cmp_null)]
     #[inline]
     pub fn hook__ZdlPvSt11align_val_t(&mut self, ptr: *mut c_void, _alignment: usize) {
+        //log::info!("hook__ZdlPvSt11align_val_t");   
         if ptr != std::ptr::null_mut() {
             unsafe { self.allocator_mut().release(ptr) }
         }
@@ -495,6 +813,7 @@ impl AsanRuntime {
         fd: i32,
         offset: usize,
     ) -> *mut c_void {
+        log::info!("hook_mmap");   
         extern "system" {
             fn mmap(
                 addr: *const c_void,
@@ -506,6 +825,7 @@ impl AsanRuntime {
             ) -> *mut c_void;
         }
         let res = unsafe { mmap(addr, length, prot, flags, fd, offset) };
+        log::info!("hook_mmap returned {:p}", res);   
         if res != (-1_isize as *mut c_void) {
             self.allocator_mut()
                 .map_shadow_for_region(res as usize, res as usize + length, true);
@@ -515,12 +835,14 @@ impl AsanRuntime {
 
     #[inline]
     pub fn hook_munmap(&mut self, addr: *const c_void, length: usize) -> i32 {
+        log::info!("hook_munmap");   
         extern "system" {
             fn munmap(addr: *const c_void, length: usize) -> i32;
         }
         let res = unsafe { munmap(addr, length) };
         if res != -1 {
-            Allocator::poison(self.allocator_mut().map_to_shadow(addr as usize), length);
+            self.allocator_mut().poison_shadow(addr as *mut c_void, false);
+            // Allocator::poison(self.allocator_mut().map_to_shadow(addr as usize), length);
         }
         res
     }
@@ -528,10 +850,12 @@ impl AsanRuntime {
     #[inline]
     #[allow(non_snake_case)]
     pub fn hook__write(&mut self, fd: i32, buf: *const c_void, count: usize) -> usize {
+        //log::info!("hook__write");   
         self.hook_write(fd, buf, count)
     }
     #[inline]
     pub fn hook_write(&mut self, fd: i32, buf: *const c_void, count: usize) -> usize {
+        //log::info!("hook_write");  
         extern "system" {
             fn write(fd: i32, buf: *const c_void, count: usize) -> usize;
         }
@@ -550,10 +874,12 @@ impl AsanRuntime {
     #[inline]
     #[allow(non_snake_case)]
     pub fn hook__read(&mut self, fd: i32, buf: *mut c_void, count: usize) -> usize {
+        //log::info!("hook__read");  
         self.hook_read(fd, buf, count)
     }
     #[inline]
     pub fn hook_read(&mut self, fd: i32, buf: *mut c_void, count: usize) -> usize {
+        //log::info!("hook_read");  
         extern "system" {
             fn read(fd: i32, buf: *mut c_void, count: usize) -> usize;
         }
@@ -571,6 +897,7 @@ impl AsanRuntime {
 
     #[inline]
     pub fn hook_fgets(&mut self, s: *mut c_void, size: u32, stream: *mut c_void) -> *mut c_void {
+        //log::info!("hook_fgets"); 
         extern "system" {
             fn fgets(s: *mut c_void, size: u32, stream: *mut c_void) -> *mut c_void;
         }
@@ -588,6 +915,7 @@ impl AsanRuntime {
 
     #[inline]
     pub fn hook_memcmp(&mut self, s1: *const c_void, s2: *const c_void, n: usize) -> i32 {
+        //log::info!("hook_memcmp"); 
         extern "system" {
             fn memcmp(s1: *const c_void, s2: *const c_void, n: usize) -> i32;
         }
@@ -614,6 +942,7 @@ impl AsanRuntime {
 
     #[inline]
     pub fn hook_memcpy(&mut self, dest: *mut c_void, src: *const c_void, n: usize) -> *mut c_void {
+        //log::info!("hook_memcpy"); 
         extern "system" {
             fn memcpy(dest: *mut c_void, src: *const c_void, n: usize) -> *mut c_void;
         }
@@ -641,6 +970,7 @@ impl AsanRuntime {
     #[inline]
     #[cfg(not(target_vendor = "apple"))]
     pub fn hook_mempcpy(&mut self, dest: *mut c_void, src: *const c_void, n: usize) -> *mut c_void {
+        //log::info!("hook_mempcpy"); 
         extern "system" {
             fn mempcpy(dest: *mut c_void, src: *const c_void, n: usize) -> *mut c_void;
         }
@@ -667,6 +997,7 @@ impl AsanRuntime {
 
     #[inline]
     pub fn hook_memmove(&mut self, dest: *mut c_void, src: *const c_void, n: usize) -> *mut c_void {
+        //log::info!("hook_memmove"); 
         extern "system" {
             fn memmove(dest: *mut c_void, src: *const c_void, n: usize) -> *mut c_void;
         }
@@ -693,6 +1024,7 @@ impl AsanRuntime {
 
     #[inline]
     pub fn hook_memset(&mut self, dest: *mut c_void, c: i32, n: usize) -> *mut c_void {
+        log::info!("hook_memset");
         extern "system" {
             fn memset(dest: *mut c_void, c: i32, n: usize) -> *mut c_void;
         }
@@ -710,6 +1042,7 @@ impl AsanRuntime {
 
     #[inline]
     pub fn hook_memchr(&mut self, s: *mut c_void, c: i32, n: usize) -> *mut c_void {
+        //log::info!("hook_memchr"); 
         extern "system" {
             fn memchr(s: *mut c_void, c: i32, n: usize) -> *mut c_void;
         }
@@ -728,6 +1061,7 @@ impl AsanRuntime {
     #[inline]
     #[cfg(not(target_vendor = "apple"))]
     pub fn hook_memrchr(&mut self, s: *mut c_void, c: i32, n: usize) -> *mut c_void {
+        //log::info!("hook_memrchr"); 
         extern "system" {
             fn memrchr(s: *mut c_void, c: i32, n: usize) -> *mut c_void;
         }
@@ -751,6 +1085,7 @@ impl AsanRuntime {
         needle: *const c_void,
         needlelen: usize,
     ) -> *mut c_void {
+        //log::info!("hook_memmem"); 
         extern "system" {
             fn memmem(
                 haystack: *const c_void,
@@ -783,6 +1118,7 @@ impl AsanRuntime {
     #[cfg(not(target_os = "android"))]
     #[inline]
     pub fn hook_bzero(&mut self, s: *mut c_void, n: usize) {
+        //log::info!("hook_bzero"); 
         extern "system" {
             fn bzero(s: *mut c_void, n: usize);
         }
@@ -801,6 +1137,7 @@ impl AsanRuntime {
     #[cfg(all(not(target_os = "android"), not(target_vendor = "apple")))]
     #[inline]
     pub fn hook_explicit_bzero(&mut self, s: *mut c_void, n: usize) {
+        //log::info!("hook_explicit_bzero"); 
         extern "system" {
             fn explicit_bzero(s: *mut c_void, n: usize);
         }
@@ -819,6 +1156,7 @@ impl AsanRuntime {
     #[cfg(not(target_os = "android"))]
     #[inline]
     pub fn hook_bcmp(&mut self, s1: *const c_void, s2: *const c_void, n: usize) -> i32 {
+        //log::info!("hook_bcmp"); 
         extern "system" {
             fn bcmp(s1: *const c_void, s2: *const c_void, n: usize) -> i32;
         }
@@ -845,6 +1183,7 @@ impl AsanRuntime {
 
     #[inline]
     pub fn hook_strchr(&mut self, s: *mut c_char, c: i32) -> *mut c_char {
+        //log::info!("hook_strchr");         
         extern "system" {
             fn strchr(s: *mut c_char, c: i32) -> *mut c_char;
             fn strlen(s: *const c_char) -> usize;
@@ -866,6 +1205,7 @@ impl AsanRuntime {
 
     #[inline]
     pub fn hook_strrchr(&mut self, s: *mut c_char, c: i32) -> *mut c_char {
+        //log::info!("hook_strrchr");  
         extern "system" {
             fn strrchr(s: *mut c_char, c: i32) -> *mut c_char;
             fn strlen(s: *const c_char) -> usize;
@@ -887,6 +1227,7 @@ impl AsanRuntime {
 
     #[inline]
     pub fn hook_strcasecmp(&mut self, s1: *const c_char, s2: *const c_char) -> i32 {
+        //log::info!("hook_strcasecmp"); 
         extern "system" {
             fn strcasecmp(s1: *const c_char, s2: *const c_char) -> i32;
             fn strlen(s: *const c_char) -> usize;
@@ -920,6 +1261,7 @@ impl AsanRuntime {
 
     #[inline]
     pub fn hook_strncasecmp(&mut self, s1: *const c_char, s2: *const c_char, n: usize) -> i32 {
+        //log::info!("hook_strncasecmp"); 
         extern "system" {
             fn strncasecmp(s1: *const c_char, s2: *const c_char, n: usize) -> i32;
         }
@@ -946,6 +1288,7 @@ impl AsanRuntime {
 
     #[inline]
     pub fn hook_strcat(&mut self, s1: *mut c_char, s2: *const c_char) -> *mut c_char {
+        //log::info!("hook_strcat"); 
         extern "system" {
             fn strcat(s1: *mut c_char, s2: *const c_char) -> *mut c_char;
             fn strlen(s: *const c_char) -> usize;
@@ -979,6 +1322,7 @@ impl AsanRuntime {
 
     #[inline]
     pub fn hook_strcmp(&mut self, s1: *const c_char, s2: *const c_char) -> i32 {
+        //log::info!("hook_strcmp"); 
         extern "system" {
             fn strcmp(s1: *const c_char, s2: *const c_char) -> i32;
             fn strlen(s: *const c_char) -> usize;
@@ -1012,6 +1356,7 @@ impl AsanRuntime {
 
     #[inline]
     pub fn hook_strncmp(&mut self, s1: *const c_char, s2: *const c_char, n: usize) -> i32 {
+        //log::info!("hook_strncmp"); 
         extern "system" {
             fn strncmp(s1: *const c_char, s2: *const c_char, n: usize) -> i32;
             fn strnlen(s: *const c_char, n: usize) -> usize;
@@ -1045,6 +1390,7 @@ impl AsanRuntime {
 
     #[inline]
     pub fn hook_strcpy(&mut self, dest: *mut c_char, src: *const c_char) -> *mut c_char {
+        //log::info!("hook_strcpy"); 
         extern "system" {
             fn strcpy(dest: *mut c_char, src: *const c_char) -> *mut c_char;
             fn strlen(s: *const c_char) -> usize;
@@ -1078,6 +1424,7 @@ impl AsanRuntime {
 
     #[inline]
     pub fn hook_strncpy(&mut self, dest: *mut c_char, src: *const c_char, n: usize) -> *mut c_char {
+        //log::info!("hook_strncpy"); 
         extern "system" {
             fn strncpy(dest: *mut c_char, src: *const c_char, n: usize) -> *mut c_char;
         }
@@ -1104,6 +1451,7 @@ impl AsanRuntime {
 
     #[inline]
     pub fn hook_stpcpy(&mut self, dest: *mut c_char, src: *const c_char) -> *mut c_char {
+        //log::info!("hook_stpcpy"); 
         extern "system" {
             fn stpcpy(dest: *mut c_char, src: *const c_char) -> *mut c_char;
             fn strlen(s: *const c_char) -> usize;
@@ -1138,10 +1486,12 @@ impl AsanRuntime {
     #[inline]
     #[allow(non_snake_case)]
     pub fn hook__strdup(&mut self, s: *const c_char) -> *mut c_char {
+        //log::info!("hook__strdup"); 
         self.hook_strdup(s)
     }
     #[inline]
     pub fn hook_strdup(&mut self, s: *const c_char) -> *mut c_char {
+        //log::info!("hook_strdup");         
         extern "system" {
             fn strlen(s: *const c_char) -> usize;
             fn strcpy(dest: *mut c_char, src: *const c_char) -> *mut c_char;
@@ -1166,6 +1516,7 @@ impl AsanRuntime {
 
     #[inline]
     pub fn hook_strlen(&mut self, s: *const c_char) -> usize {
+        //log::info!("hook_strlen");    
         extern "system" {
             fn strlen(s: *const c_char) -> usize;
         }
@@ -1184,6 +1535,7 @@ impl AsanRuntime {
 
     #[inline]
     pub fn hook_strnlen(&mut self, s: *const c_char, n: usize) -> usize {
+        //log::info!("hook_strnlen");    
         extern "system" {
             fn strnlen(s: *const c_char, n: usize) -> usize;
         }
@@ -1202,6 +1554,7 @@ impl AsanRuntime {
 
     #[inline]
     pub fn hook_strstr(&mut self, haystack: *const c_char, needle: *const c_char) -> *mut c_char {
+        //log::info!("hook_strstr");    
         extern "system" {
             fn strstr(haystack: *const c_char, needle: *const c_char) -> *mut c_char;
             fn strlen(s: *const c_char) -> usize;
@@ -1239,6 +1592,7 @@ impl AsanRuntime {
         haystack: *const c_char,
         needle: *const c_char,
     ) -> *mut c_char {
+        //log::info!("hook_strcasestr");            
         extern "system" {
             fn strcasestr(haystack: *const c_char, needle: *const c_char) -> *mut c_char;
             fn strlen(s: *const c_char) -> usize;
@@ -1272,6 +1626,7 @@ impl AsanRuntime {
 
     #[inline]
     pub fn hook_atoi(&mut self, s: *const c_char) -> i32 {
+        //log::info!("hook_atoi");   
         extern "system" {
             fn atoi(s: *const c_char) -> i32;
             fn strlen(s: *const c_char) -> usize;
@@ -1294,6 +1649,7 @@ impl AsanRuntime {
     /// Hooks `atol`
     #[inline]
     pub fn hook_atol(&mut self, s: *const c_char) -> i32 {
+        //log::info!("hook_atol");           
         extern "system" {
             fn atol(s: *const c_char) -> i32;
             fn strlen(s: *const c_char) -> usize;
@@ -1316,6 +1672,7 @@ impl AsanRuntime {
     /// Hooks `atoll`
     #[inline]
     pub fn hook_atoll(&mut self, s: *const c_char) -> i64 {
+        //log::info!("hook_atoll");             
         extern "system" {
             fn atoll(s: *const c_char) -> i64;
             fn strlen(s: *const c_char) -> usize;
@@ -1338,6 +1695,7 @@ impl AsanRuntime {
     /// Hooks `wcslen`
     #[inline]
     pub fn hook_wcslen(&mut self, s: *const wchar_t) -> usize {
+        //log::info!("hook_wcslen");             
         extern "system" {
             fn wcslen(s: *const wchar_t) -> usize;
         }
@@ -1360,6 +1718,7 @@ impl AsanRuntime {
     /// Hooks `wcscpy`
     #[inline]
     pub fn hook_wcscpy(&mut self, dest: *mut wchar_t, src: *const wchar_t) -> *mut wchar_t {
+        //log::info!("hook_wcscpy");    
         extern "system" {
             fn wcscpy(dest: *mut wchar_t, src: *const wchar_t) -> *mut wchar_t;
             fn wcslen(s: *const wchar_t) -> usize;
@@ -1394,6 +1753,7 @@ impl AsanRuntime {
     /// Hooks `wcscmp`
     #[inline]
     pub fn hook_wcscmp(&mut self, s1: *const wchar_t, s2: *const wchar_t) -> i32 {
+        //log::info!("hook_wcscmp");   
         extern "system" {
             fn wcscmp(s1: *const wchar_t, s2: *const wchar_t) -> i32;
             fn wcslen(s: *const wchar_t) -> usize;

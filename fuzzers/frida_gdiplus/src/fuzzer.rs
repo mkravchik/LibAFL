@@ -51,6 +51,7 @@ use libafl_frida::{
     coverage_rt::{CoverageRuntime, MAP_SIZE},
     executor::FridaInProcessExecutor,
     helper::FridaInstrumentationHelper,
+    hook_rt::HookRuntime,
 };
 use libafl_targets::cmplog::CmpLogObserver;
 
@@ -100,9 +101,9 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
 
                 let coverage = CoverageRuntime::new();
                 let asan = AsanRuntime::new(&options);
-
+                let hooks: HookRuntime = HookRuntime::new();
                 let mut frida_helper =
-                    FridaInstrumentationHelper::new(&gum, options, tuple_list!(coverage, asan));
+                    FridaInstrumentationHelper::new(&gum, options, tuple_list!(coverage, asan, hooks));
                 //
                 // Create an observation channel using the coverage map
                 let edges_observer = HitcountsMapObserver::new(StdMapObserver::from_mut_ptr(
@@ -200,6 +201,7 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
 
                 let mut stages = tuple_list!(StdMutationalStage::new(mutator));
 
+                
                 fuzzer.fuzz_loop(&mut stages, &mut executor, &mut state, &mut mgr)?;
 
                 Ok(())
@@ -256,7 +258,7 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                     .unwrap()
                 });
 
-                println!("We're a client, let's fuzz :)");
+                println!("We're a client, let's fuzz (cmplog):)");
 
                 // Create a PNG dictionary if not existing
                 if state.metadata_map().get::<Tokens>().is_none() {

@@ -211,6 +211,18 @@ where
                     range.end - range.start,
                 ));
             }
+
+            //Exclude the fuzzer module
+            for range in ranges.iter() {
+                if range.1.1 == "fuzzer" {
+                    log::info!("excluding range: {:x}-{:x}", range.0.start, range.0.end);
+                    stalker.exclude(&MemoryRange::new(
+                        NativePointer(range.0.start as *mut c_void),
+                        range.0.end - range.0.start,
+                    ));
+                }
+            }
+
         }
 
         #[cfg(windows)]

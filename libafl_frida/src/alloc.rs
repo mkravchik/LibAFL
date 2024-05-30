@@ -10,7 +10,7 @@
 use std::{collections::BTreeMap, ffi::c_void};
 
 use backtrace::Backtrace;
-use frida_gum::{PageProtection, RangeDetails};
+
 use hashbrown::HashMap;
 use libafl_bolts::cli::FuzzerOptions;
 use mmap_rs::Protection;
@@ -27,7 +27,16 @@ use mmap_rs::{MemoryAreas, MmapFlags, MmapMut, MmapOptions, ReservedMut};
 use rangemap::RangeSet;
 use serde::{Deserialize, Serialize};
 
+
 use crate::asan::errors::{AsanError, AsanErrors};
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct ShadowMetadata{
+    pub real_addr: usize,
+    pub real_size: usize,
+    pub shadow_start: usize,
+    pub shadow_end: usize,
+}
 
 /// An allocator wrapper with binary-only address sanitization
 #[derive(Debug)]
@@ -52,6 +61,8 @@ pub struct Allocator {
     mappings: HashMap<usize, MmapMut>,
     /// The shadow memory pages
     shadow_pages: RangeSet<usize>,
+    /// The shadow memory pages for each allocation. Maps: real address to shadow_start..shadow_end
+    allocation_shadows: HashMap<usize, ShadowMetadata>,
     /// A list of allocations
     allocation_queue: BTreeMap<usize, Vec<AllocationMetadata>>,
     /// The size of the largest allocation
@@ -67,6 +78,7 @@ pub struct Allocator {
 macro_rules! map_to_shadow {
     ($self:expr, $address:expr) => {
         $self.shadow_offset + (($address >> 3) & ((1 << ($self.shadow_bit + 1)) - 1))
+        // $self.shadow_offset + (($address) & ((1 << ($self.shadow_bit + 1)) - 1))
     };
 }
 
@@ -189,6 +201,30 @@ impl Allocator {
             if self.allocation_backtraces {
                 metadata.allocation_site_backtrace = Some(Backtrace::new_unresolved());
             }
+
+            // we are reusing a previosly freed memory. we need to unpoison its shadow as well
+            // find the shadow in self.allocation_shadows, the address should be metadata.address + self.page_size
+            if let Some(shadow_md) = self.allocation_shadows.get(&(metadata.address + self.page_size)){
+                log::trace!("poison_shadow found range {:x} - {:x} for allocation {:x}", shadow_md.shadow_start, shadow_md.shadow_end, metadata.address + self.page_size);
+                
+                // Unpoison the entire shadow
+                self.poison_shadow((shadow_md.real_addr) as *mut c_void, true);
+                
+                // now borrow it mutable
+                let shadow_md = self.allocation_shadows.get_mut(&(metadata.address + self.page_size)).unwrap();
+                *shadow_md = ShadowMetadata{
+                    real_addr: shadow_md.real_addr,
+                    real_size: size,
+                    shadow_start: shadow_md.shadow_start,
+                    shadow_end: shadow_md.shadow_start + (size / 8) + 1,
+                };
+            }
+            else{
+                log::error!("Could not find shadow mapping for {:x}", metadata.address + self.page_size);
+                log::error!(" ATTACH A DEBUGGER WITHING A MINUTE to pid {}", std::process::id());
+                std::thread::sleep(std::time::Duration::from_secs(60));
+            }
+
             metadata
         } else {
             // log::trace!("{:x}, {:x}", self.current_mapping_addr, rounded_up_size);
@@ -208,11 +244,19 @@ impl Allocator {
                 / MmapOptions::allocation_granularity())
                 * MmapOptions::allocation_granularity();
 
+            // self.map_shadow_for_region(
+            //     mapping.as_ptr() as usize,
+            //     mapping.as_ptr().add(rounded_up_size) as usize,
+            //     false,
+            // );
+            // Shadow only the part returned to the user - 
+            // note that in the original Asan there are redzones before and after the allocation!
             self.map_shadow_for_region(
-                mapping.as_ptr() as usize,
-                mapping.as_ptr().add(rounded_up_size) as usize,
+                mapping.as_ptr() as usize + self.page_size,
+                mapping.as_ptr() as usize + self.page_size + size,
                 false,
             );
+
             let address = mapping.as_ptr() as usize;
             self.mappings.insert(address, mapping);
 
@@ -230,12 +274,14 @@ impl Allocator {
         };
 
         self.largest_allocation = std::cmp::max(self.largest_allocation, metadata.actual_size);
-        // unpoison the shadow memory for the allocation itself
-        Self::unpoison(
-            map_to_shadow!(self, metadata.address + self.page_size),
-            size,
-        );
+
         let address = (metadata.address + self.page_size) as *mut c_void;
+        // unpoison the shadow memory for the allocation itself
+        // Self::unpoison(
+        //     map_to_shadow!(self, metadata.address + self.page_size),
+        //     size,
+        // );
+        self.poison_shadow(address as *mut c_void, true);
 
         self.allocations.insert(address as usize, metadata);
         // log::trace!("serving address: {:?}, size: {:x}", address, size);
@@ -245,7 +291,7 @@ impl Allocator {
     /// Releases the allocation at the given address.
     #[allow(clippy::missing_safety_doc)]
     pub unsafe fn release(&mut self, ptr: *mut c_void) {
-        //log::trace!("freeing address: {:?}", ptr);
+        // log::trace!("freeing address: {:?}", ptr);
         let Some(metadata) = self.allocations.get_mut(&(ptr as usize)) else {
             if !ptr.is_null() {
                 AsanErrors::get_mut()
@@ -261,7 +307,7 @@ impl Allocator {
                 Backtrace::new(),
             )));
         }
-        let shadow_mapping_start = map_to_shadow!(self, ptr as usize);
+        // let shadow_mapping_start = map_to_shadow!(self, ptr as usize);
 
         metadata.freed = true;
         if self.allocation_backtraces {
@@ -269,7 +315,8 @@ impl Allocator {
         }
 
         // poison the shadow memory for the allocation
-        Self::poison(shadow_mapping_start, metadata.size);
+        self.poison_shadow(ptr, false)
+        // Self::poison(shadow_mapping_start, metadata.size);
     }
 
     /// Finds the metadata for the allocation at the given address.
@@ -300,14 +347,15 @@ impl Allocator {
 
     /// Resets the allocator contents
     pub fn reset(&mut self) {
+        log::trace!("resetting allocator");
         let mut tmp_allocations = Vec::new();
-        for (address, mut allocation) in self.allocations.drain() {
+        for (_address, mut allocation) in self.allocations.drain() {
             if !allocation.freed {
                 tmp_allocations.push(allocation);
                 continue;
             }
             // First poison the memory.
-            Self::poison(map_to_shadow!(self, address), allocation.size);
+            // Self::poison(map_to_shadow!(self, address), allocation.size);
 
             // Reset the allocaiton metadata object
             allocation.size = 0;
@@ -323,6 +371,7 @@ impl Allocator {
         }
 
         for allocation in tmp_allocations {
+            self.poison_shadow((allocation.address + self.page_size) as *mut c_void, false);
             self.allocations
                 .insert(allocation.address + self.page_size, allocation);
         }
@@ -342,8 +391,52 @@ impl Allocator {
         }
     }
 
+    /// Poisons the shadow memory for the given pointer
+    pub fn poison_shadow(&self, ptr: *mut c_void, unpoison: bool){
+        log::trace!("poison_shadow {:p}", ptr);
+        
+        // find the shadow in self.allocation_shadows
+        if let Some(shadow_md) = self.allocation_shadows.get(&(ptr as usize)){
+            log::trace!("poison_shadow found range {:x} - {:x} for allocation {:p}", shadow_md.shadow_start, shadow_md.shadow_end, ptr);
+            if unpoison {
+                Self::unpoison(shadow_md.shadow_start, shadow_md.real_size);            
+            }
+            else{
+                Self::poison(shadow_md.shadow_start, shadow_md.real_size);            
+            }
+        }
+        else{
+            log::error!("Could not find shadow mapping for {:x}", ptr as usize);
+            log::error!(" ATTACH A DEBUGGER WITHING A MINUTE to pid {}", std::process::id());
+            std::thread::sleep(std::time::Duration::from_secs(60));
+        }
+        
+        // // find the shadow mapping for the given pointer in self.shadow_pages
+        // let shadow_mapping_start = map_to_shadow!(self, ptr as usize);
+        
+        // //find the range in self.shadow_pages that contains the shadow_mapping_start
+        // let mut shadow_range = None;
+        // for range in self.shadow_pages.iter() {
+        //     if range.contains(&shadow_mapping_start) {
+        //         shadow_range = Some(range);
+        //         break;
+        //     }
+        // }
+        // if let Some(shadow_range) = shadow_range {
+        //     log::trace!("poison_shadow found range {:x} - {:x} for shadow_mapping_start {:x}", shadow_range.start, shadow_range.end, shadow_mapping_start);            
+        //     // unpoison the shadow memory for the allocation
+        //     // minimum between the passed size and the size of the shadow mapping if size is not 0
+        //     // otherwise the size of the shadow mapping
+        //     let shadow_size = if size == 0 {shadow_range.end - shadow_mapping_start} else {std::cmp::min(size, shadow_range.end - shadow_mapping_start)};
+        //     let shadowed_memory_size = shadow_size * 8; 
+        //     Self::poison(shadow_mapping_start, shadowed_memory_size);
+        // } else {
+        //     log::error!("Could not find shadow mapping for {:x}", ptr as usize);
+        // }
+    }
+
     fn unpoison(start: usize, size: usize) {
-        // log::trace!("unpoisoning {:x} for {:x}", start, size / 8 + 1);
+        log::trace!("unpoisoning {:x} for {:x}", start, size / 8 + 1);
         unsafe {
             std::slice::from_raw_parts_mut(start as *mut u8, size / 8).fill(0xff);
 
@@ -354,9 +447,9 @@ impl Allocator {
         }
     }
 
-    /// Poisonn an area in memory
+    /// Poison an area in memory
     pub fn poison(start: usize, size: usize) {
-        // log::trace!("poisoning {:x} for {:x}", start, size / 8 + 1);
+        log::trace!("poisoning {:x} for {:x}", start, size / 8 + 1);
         unsafe {
             std::slice::from_raw_parts_mut(start as *mut u8, size / 8).fill(0x0);
 
@@ -375,7 +468,7 @@ impl Allocator {
         unpoison: bool,
     ) -> (usize, usize) {
         // log::trace!("start: {:x}, end {:x}, size {:x}", start, end, end - start);
-
+        log::trace!("map_shadow_for_region: {:x}, {:x}", start, end);
         let shadow_mapping_start = map_to_shadow!(self, start);
 
         let shadow_start = self.round_down_to_page(shadow_mapping_start);
@@ -387,12 +480,13 @@ impl Allocator {
                     .with_address(range.start)
                     .map_mut()
                     .expect("An error occurred while mapping shadow memory");
-
+                
                 self.mappings.insert(range.start, mapping);
             }
 
             self.shadow_pages.insert(shadow_start..shadow_end);
         } else {
+            log::trace!("map_shadow_for_region: shadow_start {:x}, shadow_end {:x}", shadow_start, shadow_end);
             let mut newly_committed_regions = Vec::new();
             for gap in self.shadow_pages.gaps(&(shadow_start..shadow_end)) {
                 let mut new_reserved_region = None;
@@ -427,10 +521,27 @@ impl Allocator {
             }
         }
 
+        //add the shadow mapping to the allocation_shadows, contains the real shadow size
+        self.allocation_shadows.insert(
+            start,
+            ShadowMetadata {
+                real_addr: start,
+                real_size: end - start,
+                shadow_start: shadow_mapping_start,
+                shadow_end: shadow_mapping_start + (end - start) / 8 + 1,
+            },
+        );
+
         if unpoison {
-            Self::unpoison(shadow_mapping_start, end - start);
+            self.poison_shadow(start as *mut c_void, true);
+            // Self::unpoison(shadow_mapping_start, end - start);
         }
 
+        log::trace!(
+            "shadow_mapping_start: {:x}, shadow_size: {:x}",
+            shadow_mapping_start,
+            ((end - start) / 8 + 1)
+        );
         (shadow_mapping_start, (end - start) / 8 + 1)
     }
 
@@ -444,12 +555,33 @@ impl Allocator {
         }
         let address = address as usize;
         let shadow_size = (size + 8)/ 8 ;
-
         let shadow_addr = map_to_shadow!(self, address);
 
+        // I can't search for the passed address, because it does not necessarily points to the beginning of the allocation
+/*         if let Some(shadow_md) = self.allocation_shadows.get(&address){
+            log::trace!("check_shadow found range {:x} - {:x} for address {:x}", shadow_md.shadow_start, shadow_md.shadow_end, address);
+            if shadow_md.real_size < size{
+                log::error!("The size {:x} is larger then the original allocation {:x}!", size, shadow_md.real_size);
+                return false;
+            }            
+        }
+        else{
+            log::error!("Could not find shadow mapping for {:x}", address);
+            return false;
+        }
+        let shadow_md = self.allocation_shadows.get(&address).unwrap();
+        let shadow_addr = shadow_md.shadow_start;
+ */
         // self.map_shadow_for_region(address, address + size, false);
         
-        log::info!("check_shadow: {:x}, {:x}, {:x}, {:x}", address, shadow_size, shadow_addr, size);
+        log::trace!("check_shadow: {:x}, {:x}, {:x}, {:x}", address, shadow_size, shadow_addr, size);
+        // Check whether the shadow memory mapping exists
+        if !self.shadow_pages.contains(&shadow_addr) {
+            log::error!("check_shadow: {:x} - {:x} is not mapped", shadow_addr, shadow_addr + shadow_size);
+            return false;
+        }
+
+
         if address & 0x7 > 0 {
             let mask = !((1 << (address & 7)) - 1) as u8;
             if unsafe { (shadow_addr as *mut u8).read() } & mask != mask
@@ -464,7 +596,7 @@ impl Allocator {
 
             let (prefix, aligned, suffix) = unsafe { buf.align_to::<u128>() };
 
-            log::info!("prefix: {:?}, aligned: {:?}, suffix: {:?}", prefix.len(), aligned.len(), suffix.len());
+            log::trace!("prefix: {:?}, aligned: {:?}, suffix: {:?}", prefix.len(), aligned.len(), suffix.len());
             // return true;
             if prefix.iter().all(|&x| x == 0xff)
                 && suffix.iter().all(|&x| x == 0xff)
@@ -475,7 +607,7 @@ impl Allocator {
                 let shadow_remainder = (size + 8) % 8;
                 if shadow_remainder > 0 {
                     let remainder = unsafe { ((shadow_addr + shadow_size - 1) as *mut u8).read() };
-                    log::info!("remainder: {:x}", remainder);
+                    log::trace!("remainder: {:x}", remainder);
                     let mask = !((1 << (8 - shadow_remainder)) - 1) as u8;
 
                     remainder & mask == mask
@@ -489,7 +621,7 @@ impl Allocator {
                 let shadow_remainder = (size + 8) % 8;
                 if shadow_remainder > 0 {
                     let remainder = unsafe { ((shadow_addr + shadow_size -1) as *mut u8).read() };
-                    log::info!("remainder 2: {:x}", remainder);
+                    log::trace!("remainder 2: {:x}", remainder);
                     let mask = !((1 << (8 - shadow_remainder)) - 1) as u8;
 
                     remainder & mask == mask
@@ -526,8 +658,10 @@ impl Allocator {
     pub fn unpoison_all_existing_memory(&mut self) {
         for area in MemoryAreas::open(None).unwrap() {
             let area = area.unwrap();
+            // log::trace!("Memory area range: 0x{:x}-0x{:x}, Protection: {:?}, Shared: {:?}, Path: {:?}", area.start(), area.end(), area.protection(), area.share_mode(), area.path());
             if area.protection().intersects(Protection::READ | Protection::WRITE) && !self.is_managed(area.start() as *mut c_void){
                 if !self.using_pre_allocated_shadow_mapping && area.start() == 1 << self.shadow_bit {
+                    // log::trace!("Skipping, it is ours");
                     continue;
                 }
                 self.map_shadow_for_region(area.start(), area.end(), true);
@@ -550,6 +684,10 @@ impl Allocator {
 
         // Enumerate memory ranges that are already occupied.
         for area in MemoryAreas::open(None).unwrap() {
+            // log::trace!("Memory area range: 0x{:x}-0x{:x}, Protection: {:?}, Shared: {:?}, Path: {:?}",
+            // area.as_ref().unwrap().start(), area.as_ref().unwrap().end(),
+            //  area.as_ref().unwrap().protection(), area.as_ref().unwrap().share_mode(), area.as_ref().unwrap().path());
+
             let start = area.as_ref().unwrap().start();
             let end = area.unwrap().end();
             occupied_ranges.push((start, end));
@@ -605,6 +743,7 @@ impl Allocator {
                     shadow_bit = (*try_shadow_bit).try_into().unwrap();
 
                     log::warn!("shadow_bit {shadow_bit:x} is suitable");
+                    log::trace!("shadow area from {:x} to {:x} should be free", addr, addr + 1 << (*try_shadow_bit + 1));
                     self.pre_allocated_shadow_mappings.push(mapping);
                     self.using_pre_allocated_shadow_mapping = true;
                     break;
@@ -621,6 +760,13 @@ impl Allocator {
         self.shadow_bit = shadow_bit;
         self.base_mapping_addr = addr + addr + addr;
         self.current_mapping_addr = addr + addr + addr;
+        log::trace!(
+            "shadow_offset: {:x}, shadow_bit: {:x}, base_mapping_addr: {:x}, current_mapping_addr: {:x}",
+            self.shadow_offset,
+            self.shadow_bit,
+            self.base_mapping_addr,
+            self.current_mapping_addr
+        );
     }
 }
 
@@ -655,6 +801,7 @@ impl Default for Allocator {
             shadow_bit: 0,
             allocations: HashMap::new(),
             shadow_pages: RangeSet::new(),
+            allocation_shadows: HashMap::new(),
             allocation_queue: BTreeMap::new(),
             largest_allocation: 0,
             total_allocation_size: 0,

@@ -344,3 +344,122 @@ impl Default for FridaOptions {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use libafl_bolts::{rands::StdRand, tuples::tuple_list, cli::FuzzerOptions};
+    use clap_builder::Parser;
+    use libafl::{
+        corpus::{Corpus, InMemoryCorpus, Testcase},
+        events::NopEventManager,
+        executors::{ExitKind, InProcessExecutor},
+        feedbacks::ConstFeedback,
+        inputs::BytesInput,
+        monitors::SimpleMonitor,
+        mutators::{mutations::BitFlipMutator, StdScheduledMutator},
+        schedulers::RandScheduler,
+        stages::StdMutationalStage,
+        state::StdState,
+        Fuzzer, StdFuzzer, feedback_or_fast, feedback_and_fast
+    };
+
+    use crate::{
+        asan::{
+            errors::{AsanErrorsFeedback, AsanErrorsObserver, ASAN_ERRORS},
+            asan_rt::AsanRuntime,
+        },
+        coverage_rt::CoverageRuntime,
+        executor::FridaInProcessExecutor,
+        helper::FridaInstrumentationHelper,
+        hook_rt::HookRuntime,
+    };
+
+    use frida_gum::Gum;
+
+    #[test]
+    fn test_asan() {
+        let rand = StdRand::with_seed(0);
+
+        let mut corpus = InMemoryCorpus::<BytesInput>::new();
+        
+        //TODO - make sure we use the right one
+        let testcase = Testcase::new(vec![0; 4].into());
+        corpus.add(testcase).unwrap();
+
+        let mut feedback = ConstFeedback::new(false);
+        // let mut objective = ConstFeedback::new(false);
+        // Feedbacks to recognize an input as solution
+        let mut objective = feedback_or_fast!(
+            // TODO - make sure we don't need these
+            // CrashFeedback::new(),
+            // TimeoutFeedback::new(),
+            // true enables the AsanErrorFeedback
+            feedback_and_fast!(ConstFeedback::from(true), AsanErrorsFeedback::new())
+        );
+
+        let mut state = StdState::new(
+            rand,
+            corpus,
+            InMemoryCorpus::<BytesInput>::new(),
+            &mut feedback,
+            &mut objective,
+        )
+        .unwrap();
+
+        let _monitor = SimpleMonitor::new(|s| {
+            println!("{s}");
+        });
+        let mut event_manager = NopEventManager::new();
+
+        // let feedback = ConstFeedback::new(false);
+        // let objective = ConstFeedback::new(false);
+
+        let scheduler = RandScheduler::new();
+        let mut fuzzer = StdFuzzer::new(scheduler, feedback, objective);
+
+        let observers = tuple_list!(
+            unsafe{ AsanErrorsObserver::new(&ASAN_ERRORS)} //,
+        );
+
+        let mut harness = |_buf: &BytesInput| ExitKind::Ok;
+
+        let gum = unsafe {Gum::obtain()};
+        
+        let simulated_args = vec!["-H", "harness.dll", "-i", "corpus", "-o", "output"];
+
+        let options: FuzzerOptions = FuzzerOptions::try_parse_from(simulated_args).unwrap();
+
+        let coverage = CoverageRuntime::new();
+        let asan = AsanRuntime::new(&options);
+        let hooks: HookRuntime = HookRuntime::new();
+        let mut frida_helper =
+            FridaInstrumentationHelper::new(&gum, &options, tuple_list!(coverage, asan, hooks));
+
+        let mut executor = FridaInProcessExecutor::new(
+            &gum,
+            InProcessExecutor::new(
+                &mut harness,
+                observers, // tuple_list!(),
+                &mut fuzzer,
+                &mut state,
+                &mut event_manager,
+            )
+            .unwrap(),
+            &mut frida_helper,
+        );
+
+        // TODO - not sure what mutator do I need here, we use
+        // let mutator = StdScheduledMutator::new(havoc_mutations().merge(tokens_mutations()));
+
+        let mutator = StdScheduledMutator::new(tuple_list!(BitFlipMutator::new()));
+        let mut stages = tuple_list!(StdMutationalStage::new(mutator));
+
+        for i in 0..1000 {
+            fuzzer
+                .fuzz_one(&mut stages, &mut executor, &mut state, &mut event_manager)
+                .unwrap_or_else(|_| panic!("Error in iter {i}"));
+        }
+
+        assert_eq!(2 + 2, 4);
+    }
+}

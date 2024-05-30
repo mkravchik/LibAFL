@@ -9,8 +9,25 @@ use std::process::Command;
 
 #[cfg(unix)]
 use libc::siginfo_t;
+
 #[cfg(windows)]
-use windows::Win32::System::Diagnostics::Debug::{CONTEXT, EXCEPTION_POINTERS};
+use windows::{
+    Win32::System::Diagnostics::Debug::{CONTEXT, EXCEPTION_POINTERS}
+};
+
+#[cfg(windows)]
+use winapi::
+{
+    um::{
+        psapi::{ GetModuleInformation, EnumProcessModules, GetModuleFileNameExA, MODULEINFO}, 
+        processthreadsapi::GetCurrentProcess, winnt::HANDLE
+    },
+    shared::minwindef::{DWORD, HMODULE},
+};
+
+
+
+use std::ptr::null_mut;
 
 #[cfg(unix)]
 use crate::os::unix_signals::{ucontext_t, Signal};
@@ -20,6 +37,8 @@ use crate::os::unix_signals::{ucontext_t, Signal};
     any(target_os = "linux", target_os = "android"),
     target_arch = "x86_64"
 ))]
+
+
 #[allow(clippy::similar_names)]
 pub fn dump_registers<W: Write>(
     writer: &mut BufWriter<W>,
@@ -915,6 +934,58 @@ pub fn generate_minibsod<W: Write>(
     write_minibsod(writer)
 }
 
+#[cfg(windows)]
+fn dump_modules<W: Write>(writer: &mut W) -> Result<(), std::io::Error> {
+    unsafe {
+        let process: HANDLE = GetCurrentProcess();
+        let mut h_mods: [HANDLE; 1024] = [null_mut(); 1024];
+        let mut cb_needed: DWORD = 0;
+
+        if EnumProcessModules(
+            process,
+            h_mods.as_mut_ptr() as *mut HMODULE,
+            (std::mem::size_of::<HMODULE>() * h_mods.len()) as DWORD,
+            &mut cb_needed,
+        ) == 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        let count = cb_needed as usize / std::mem::size_of::<HMODULE>();
+
+        for h_mod in h_mods.iter().take(count) {
+            let mut mod_name: [i8; 1024] = [0; 1024];
+            if GetModuleFileNameExA(process,
+                *h_mod as *mut _,
+                mod_name.as_mut_ptr(),
+                1024) == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+
+            let mut mod_info: MODULEINFO = std::mem::zeroed();
+            if GetModuleInformation(process, 
+                *h_mod as *mut _, &mut mod_info, std::mem::size_of::<MODULEINFO>() as DWORD) == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+
+            let c_str = std::ffi::CStr::from_ptr(mod_name.as_ptr());
+            let str_slice = c_str.to_str().unwrap();
+            let begin_address = mod_info.lpBaseOfDll as usize;
+            let end_address = begin_address + mod_info.SizeOfImage as usize;
+            writeln!(writer, "{}: 0x{:x}-0x{:x}", str_slice, begin_address, end_address)?;
+        }
+    }
+
+    Ok(())
+}
+
+use std::thread;
+use std::time::Duration;
+
+fn sleep_for_one_minute() {
+    thread::sleep(Duration::from_secs(60));
+}
+    
 /// Generates a mini-BSOD given an EXCEPTION_POINTERS structure.
 #[cfg(windows)]
 #[allow(clippy::non_ascii_literal, clippy::too_many_lines)]
@@ -931,7 +1002,13 @@ pub fn generate_minibsod<W: Write>(
     writeln!(writer, "{:━^100}", " BACKTRACE ")?;
     writeln!(writer, "{:?}", backtrace::Backtrace::new())?;
     writeln!(writer, "{:━^100}", " MAPS ")?;
-    write_minibsod(writer)
+    // Write the list of modules
+    writeln!(writer, "{:━^100}", " MODULES ")?;
+    dump_modules(writer)?;
+    write_minibsod(writer)?;
+    writeln!(writer, "{:━^100}", " ATTACH A DEBUGGER WITHING A MINUTE ")?;
+    sleep_for_one_minute();
+    Ok(())
 }
 
 #[cfg(unix)]

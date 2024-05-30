@@ -4,7 +4,7 @@ use std::{collections::HashMap, rc::Rc};
 use capstone::{arch::x86::X86OperandType, Capstone};
 use frida_gum::{
     instruction_writer::X86Register,
-    stalker::{Instruction, StalkerIterator},
+    stalker::Instruction,
     CpuContext, ModuleMap,
 };
 use frida_gum_sys::Insn;

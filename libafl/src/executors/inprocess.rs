@@ -1017,11 +1017,13 @@ pub mod windows_asan_handler {
     }
 }
 
+/// TODO - document this
 #[cfg(all(windows, feature = "std"))]
 pub mod windows_exception_handler {
     #[cfg(feature = "std")]
     use alloc::boxed::Box;
     use alloc::{string::String, vec::Vec};
+    
     use core::{
         ffi::c_void,
         mem::transmute,
@@ -1034,9 +1036,9 @@ pub mod windows_exception_handler {
     use libafl_bolts::os::windows_exceptions::{
         ExceptionCode, Handler, CRASH_EXCEPTIONS, EXCEPTION_HANDLERS_SIZE, EXCEPTION_POINTERS,
     };
-    use windows::Win32::System::Threading::{
+    use windows::Win32::{System::Threading::{
         EnterCriticalSection, ExitProcess, LeaveCriticalSection, CRITICAL_SECTION,
-    };
+    }, Foundation::EXCEPTION_ACCESS_VIOLATION};
 
     use crate::{
         events::{EventFirer, EventRestarter},
@@ -1260,7 +1262,30 @@ pub mod windows_exception_handler {
 
             let exception_list = data.exceptions();
             if exception_list.contains(&code) {
-                log::error!("Crashed with {code}");
+                log::error!("Crashed with {code} at {:p}", 
+                    (*(*exception_pointers).ExceptionRecord).ExceptionAddress);
+                if (*(*exception_pointers).ExceptionRecord).ExceptionCode == EXCEPTION_ACCESS_VIOLATION {
+                    let is_write = (*(*exception_pointers).ExceptionRecord).ExceptionInformation[0] != 0;
+                    let inaccessible_address = (*(*exception_pointers).ExceptionRecord).ExceptionInformation[1];
+            
+                    if is_write {
+                        log::error!("Write violation at address {:x}", inaccessible_address);
+                    } else {
+                        log::error!("Read violation at address {:x}", inaccessible_address);
+                    }
+                }
+                log::error!(" ATTACH A DEBUGGER WITHING A MINUTE to pid {}", std::process::id());
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                // log::info!("Memory areas:");
+                // for area in MemoryAreas::open(None).unwrap() {
+                //     let area = area.unwrap();
+                //     if area.path().is_none() {
+                //         log::info!("Memory area range: 0x{:x}-0x{:x}, Protection: {:?}, Shared: {:?}, Path: {:?}",
+                //         area.start(), area.end(), area.protection(), area.share_mode(), area.path());
+                //     }
+                // }
+    
+                                                        
                 #[cfg(all(feature = "std"))]
                 {
                     let mut bsod = Vec::new();
