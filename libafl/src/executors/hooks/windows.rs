@@ -356,20 +356,16 @@ pub mod windows_exception_handler {
                 // as we'll mostly see the transformed blocks and not the original code.
                 #[cfg(feature = "minidump")]
                 {
-                    use std::{
-                        fs::File,
-                        os::windows::io::AsRawHandle,
-                        ptr::null_mut,
-                    };
+                    use std::{fs::File, os::windows::io::AsRawHandle, ptr::null_mut};
 
                     use winapi::{
                         shared::minwindef::{BOOL, DWORD, FALSE},
                         um::{
-                            winnt::HANDLE,
                             processthreadsapi::{
                                 GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId,
                             },
-                        }
+                            winnt::HANDLE,
+                        },
                     };
 
                     const MINI_DUMP_FULL_MEMORY_INFO: i32 = 0x00000800;
