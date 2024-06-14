@@ -340,6 +340,7 @@ mod observers {
         }
     }
 
+    #[allow(clippy::into_iter_without_iter)]
     impl<'it, const DIFFERENTIAL: bool> IntoIterator for &'it CountersMultiMapObserver<DIFFERENTIAL> {
         type Item = <Iter<'it, u8> as Iterator>::Item;
         type IntoIter = Flatten<Iter<'it, OwnedMutSlice<'static, u8>>>;
@@ -349,6 +350,7 @@ mod observers {
         }
     }
 
+    #[allow(clippy::into_iter_without_iter)]
     impl<'it, const DIFFERENTIAL: bool> IntoIterator
         for &'it mut CountersMultiMapObserver<DIFFERENTIAL>
     {
