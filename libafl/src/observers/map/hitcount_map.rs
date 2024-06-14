@@ -259,6 +259,7 @@ where
     }
 }
 
+#[allow(clippy::into_iter_without_iter)]
 impl<'it, M> IntoIterator for &'it HitcountsMapObserver<M>
 where
     M: Serialize + serde::de::DeserializeOwned,
@@ -272,6 +273,7 @@ where
     }
 }
 
+#[allow(clippy::into_iter_without_iter)]
 impl<'it, M> IntoIterator for &'it mut HitcountsMapObserver<M>
 where
     M: Serialize + serde::de::DeserializeOwned,
@@ -509,6 +511,7 @@ where
     }
 }
 
+#[allow(clippy::into_iter_without_iter)]
 impl<'it, M> IntoIterator for &'it HitcountsIterableMapObserver<M>
 where
     M: Serialize + serde::de::DeserializeOwned,
@@ -522,6 +525,7 @@ where
     }
 }
 
+#[allow(clippy::into_iter_without_iter)]
 impl<'it, M> IntoIterator for &'it mut HitcountsIterableMapObserver<M>
 where
     M: Serialize + serde::de::DeserializeOwned,
