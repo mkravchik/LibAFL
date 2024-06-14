@@ -368,16 +368,6 @@ pub mod windows_exception_handler {
                         },
                     };
 
-                    const MINI_DUMP_FULL_MEMORY_INFO: i32 = 0x00000800;
-                    const MINI_DUMP_WITH_FULL_MEMORY: i32 = 0x2;
-                    const MINI_DUMP_WITH_HANDLE_DATA: i32 = 0x4;
-                    const MINI_DUMP_WITH_THREAD_INFO: i32 = 0x1000;
-
-                    let dump_type = MINI_DUMP_WITH_FULL_MEMORY
-                        | MINI_DUMP_WITH_HANDLE_DATA
-                        | MINI_DUMP_WITH_THREAD_INFO
-                        | MINI_DUMP_FULL_MEMORY_INFO;
-
                     // Note that the struct MUST be packed! The ExceptionPointers should be
                     // at the offset of 4 bytes from the start of the struct.
                     #[allow(non_snake_case)]
@@ -399,6 +389,16 @@ pub mod windows_exception_handler {
                             CallbackParam: *mut c_void,
                         ) -> BOOL;
                     }
+                    
+                    const MINI_DUMP_FULL_MEMORY_INFO: i32 = 0x00000800;
+                    const MINI_DUMP_WITH_FULL_MEMORY: i32 = 0x2;
+                    const MINI_DUMP_WITH_HANDLE_DATA: i32 = 0x4;
+                    const MINI_DUMP_WITH_THREAD_INFO: i32 = 0x1000;
+
+                    let dump_type = MINI_DUMP_WITH_FULL_MEMORY
+                        | MINI_DUMP_WITH_HANDLE_DATA
+                        | MINI_DUMP_WITH_THREAD_INFO
+                        | MINI_DUMP_FULL_MEMORY_INFO;
 
                     let file = File::create(format!("{}_crash_dump.dmp", std::process::id()))
                         .expect("Failed to create dump file");
@@ -412,7 +412,7 @@ pub mod windows_exception_handler {
                         );
 
                         #[allow(non_snake_case)]
-                        let mut exception_info = MINIDUMP_EXCEPTION_INFORMATION {
+                        let exception_info = MINIDUMP_EXCEPTION_INFORMATION {
                             ThreadId: GetCurrentThreadId(),
                             ExceptionPointers: original_exception_pointers,
                             ClientPointers: FALSE,
@@ -423,7 +423,7 @@ pub mod windows_exception_handler {
                             GetCurrentProcessId(),
                             file_handle as HANDLE,
                             dump_type,
-                            &mut exception_info,
+                            &exception_info,
                             null_mut(),
                             null_mut(),
                         );

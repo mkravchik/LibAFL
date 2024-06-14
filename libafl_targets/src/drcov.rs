@@ -7,6 +7,7 @@ use core::ptr::addr_of;
 use std::{
     fs::File,
     io::{BufWriter, Write},
+    mem::size_of,    
     path::Path,
 };
 
