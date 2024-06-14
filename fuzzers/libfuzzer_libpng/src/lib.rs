@@ -39,8 +39,6 @@ use libafl_bolts::{
     AsSlice,
 };
 use libafl_targets::{libfuzzer_initialize, libfuzzer_test_one_input, EDGES_MAP, MAX_EDGES_FOUND};
-use mimalloc::MiMalloc;
-
 use toolbox::accum_observer::AccMapObserver;
 
 /// The main fn, `no_mangle` as it is a C main
@@ -126,7 +124,7 @@ fn fuzz(corpus_dirs: &[PathBuf], objective_dir: PathBuf, broker_port: u16) -> Re
         AccMapObserver::new(StdMapObserver::from_mut_ptr(
             "edges",
             EDGES_MAP.as_mut_ptr(),
-            MAX_EDGES_NUM,
+            MAX_EDGES_FOUND,
         ))
         .save_dr_cov(save_bb_coverage)
         .max_cnt(drcov_max_execution_cnt)
