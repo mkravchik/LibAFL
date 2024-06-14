@@ -52,8 +52,6 @@ pub fn collect_backtrace() -> u64 {
     }
     let mut hash = 0;
     for frame in &b.frames()[1..] {
-        if frame.module_base_address().is_some() && 
-            frame.module_base_address().unwrap() != core::ptr::null_mut() {
         if frame.module_base_address().is_some() && !frame.module_base_address().unwrap().is_null()
         {
             hash ^= frame.ip() as u64;
@@ -62,8 +60,7 @@ pub fn collect_backtrace() -> u64 {
                 frame.module_base_address(),
                 frame.ip()
             );
-        }
-        else{
+        } else {
             log::info!(
                 "SKipping module base {:?} ip {:?}",
                 frame.module_base_address(),

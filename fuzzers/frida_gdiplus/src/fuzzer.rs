@@ -388,8 +388,6 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                 
                 let asan_observer = AsanErrorsObserver::from_static_asan_errors();
 
-                let asan_observer = AsanErrorsObserver::from_static_asan_errors();
-
                 // Feedback to rate the interestingness of an input
                 // This one is composed by two Feedbacks in OR
                 let mut feedback = feedback_or!(
@@ -400,9 +398,10 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                     TimeFeedback::new(&time_observer)
                 );
 
+                #[cfg(unix)]
                 let mut objective = feedback_or_fast!(
                     CrashFeedback::new(),
-                    TimeoutFeedback::new(),
+                    TimeoutFeedback::new()
                     feedback_and_fast!(
                         ConstFeedback::from(false),
                         AsanErrorsFeedback::new(&asan_observer)
@@ -427,7 +426,12 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                     ReachabilityFeedback::new(&reachability_observer_meta),
                     NewHashFeedbackWithStack::new(&bt_observer),
                     CrashFeedback::new(),
-                    TimeoutFeedback::new()
+                    TimeoutFeedback::new(),
+                    feedback_and_fast!(
+                        ConstFeedback::from(false),
+                        AsanErrorsFeedback::new(&asan_observer)
+                    )
+
                 );
 
                 // If not restarting, create a State from scratch

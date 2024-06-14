@@ -2,7 +2,6 @@
 
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
-use log::info;
 use core::{
     cell::UnsafeCell,
     fmt::{self, Display, Formatter},

@@ -582,24 +582,22 @@ where
         }
         if basic_block_size != 0 {
             // log::trace!("{basic_block_start:#016X}:{basic_block_size:X}");
-            if let Some(rt) = runtimes.borrow_mut().match_first_type_mut::<DrCovRuntime>() {
+            if let Some(rt) = runtimes_unborrowed
+                .borrow_mut()
+                .match_first_type_mut::<DrCovRuntime>()
+            {
                 rt.drcov_basic_blocks.push(DrCovBasicBlock::new(
                     basic_block_start as usize,
                     basic_block_start as usize + basic_block_size,
                 ));
             }
-            if let Some(rt) = runtimes
+            if let Some(rt) = runtimes_unborrowed
                 .borrow_mut()
                 .match_first_type_mut::<CoverageRuntime>()
             {
                 rt.set_bb_size(basic_block_start, basic_block_size);
             }
         }
-    }
-
-    /// Clean up all runtimes
-    pub fn deinit(&mut self, gum: &Gum) {
-        (*self.runtimes).borrow_mut().deinit_all(gum);
     }
 
     /// Clean up all runtimes
