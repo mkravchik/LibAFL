@@ -409,6 +409,7 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                 );
 
                 // Demonstrating crash backtrace
+                #[cfg(windows)]
                 let mut bt = None;
                 #[cfg(windows)]
                 let bt_observer = BacktraceObserverWithStack::new(
