@@ -401,7 +401,7 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                 #[cfg(unix)]
                 let mut objective = feedback_or_fast!(
                     CrashFeedback::new(),
-                    TimeoutFeedback::new()
+                    TimeoutFeedback::new(),
                     feedback_and_fast!(
                         ConstFeedback::from(false),
                         AsanErrorsFeedback::new(&asan_observer)
