@@ -335,6 +335,7 @@ jobs:
           - ./fuzzers/backtrace_baby_fuzzers/c_code_with_inprocess_executor
           - ./fuzzers/backtrace_baby_fuzzers/rust_code_with_fork_executor
           - ./fuzzers/toolbox
+          # - ./fuzzers/frida_simple_exe
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v3
