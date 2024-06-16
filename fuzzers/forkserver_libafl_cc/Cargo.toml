@@ -28,6 +28,7 @@ libafl_bolts = { path = "../../libafl_bolts/" }
 libafl_cc = { path = "../../libafl_cc/" }
 libafl_targets = { path = "../../libafl_targets/", features = ["sancov_pcguard_hitcounts", "libfuzzer", "pointer_maps"] }
 env_logger = "0.11"
+toolbox = {path = "../toolbox/"}
 
 [lib]
 name = "libforkserver_libafl_cc"

@@ -21,10 +21,10 @@ use libafl::{
 use libafl_bolts::{
     rands::StdRand,
     shmem::{ShMem, ShMemProvider, UnixShMemProvider},
-    tuples::{tuple_list, Handled, MatchNameRef, Merge},
+    tuples::{tuple_list, Handled, MatchName, MatchNameRef, Merge},
     AsSliceMut, Truncate,
 };
-use libafl_targets::EDGES_MAP_SIZE_IN_USE;
+use libafl_targets::{EDGES_MAP_PTR, EDGES_MAP_SIZE_IN_USE};
 use nix::sys::signal::Signal;
 use toolbox::accum_observer::AccMapObserver;
 
