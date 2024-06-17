@@ -64,6 +64,7 @@ mod observers {
         fmt::Debug,
         hash::{Hash, Hasher},
         iter::Flatten,
+        mem::size_of,
         ptr::{addr_of, addr_of_mut},
         slice::{from_raw_parts, Iter, IterMut},
     };
@@ -161,7 +162,7 @@ mod observers {
             for map in unsafe { &*addr_of!(COUNTERS_MAPS) } {
                 let slice = map.as_slice();
                 let ptr = slice.as_ptr();
-                let map_size = slice.len() / core::mem::size_of::<u8>();
+                let map_size = slice.len() / size_of::<u8>();
                 unsafe {
                     hasher.write(from_raw_parts(ptr, map_size));
                 }
@@ -339,6 +340,7 @@ mod observers {
         }
     }
 
+    #[allow(clippy::into_iter_without_iter)]
     impl<'it, const DIFFERENTIAL: bool> IntoIterator for &'it CountersMultiMapObserver<DIFFERENTIAL> {
         type Item = <Iter<'it, u8> as Iterator>::Item;
         type IntoIter = Flatten<Iter<'it, OwnedMutSlice<'static, u8>>>;
@@ -348,6 +350,7 @@ mod observers {
         }
     }
 
+    #[allow(clippy::into_iter_without_iter)]
     impl<'it, const DIFFERENTIAL: bool> IntoIterator
         for &'it mut CountersMultiMapObserver<DIFFERENTIAL>
     {

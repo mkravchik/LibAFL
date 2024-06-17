@@ -385,7 +385,7 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                 //     reachability_map,
                 //     REACHABILITY_MAP_SIZE,
                 // );
-
+                
                 let asan_observer = AsanErrorsObserver::from_static_asan_errors();
 
                 // Feedback to rate the interestingness of an input
@@ -398,7 +398,6 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                     TimeFeedback::new(&time_observer)
                 );
 
-                //TODO - add my feedback as objective!
                 #[cfg(unix)]
                 let mut objective = feedback_or_fast!(
                     CrashFeedback::new(),
@@ -410,6 +409,7 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                 );
 
                 // Demonstrating crash backtrace
+                #[cfg(windows)]
                 let mut bt = None;
                 #[cfg(windows)]
                 let bt_observer = BacktraceObserverWithStack::new(
@@ -427,7 +427,12 @@ unsafe fn fuzz(options: &FuzzerOptions) -> Result<(), Error> {
                     ReachabilityFeedback::new(&reachability_observer_meta),
                     NewHashFeedbackWithStack::new(&bt_observer),
                     CrashFeedback::new(),
-                    TimeoutFeedback::new()
+                    TimeoutFeedback::new(),
+                    feedback_and_fast!(
+                        ConstFeedback::from(false),
+                        AsanErrorsFeedback::new(&asan_observer)
+                    )
+
                 );
 
                 // If not restarting, create a State from scratch

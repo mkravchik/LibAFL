@@ -92,7 +92,6 @@ fn fuzz(corpus_dirs: &[PathBuf], objective_dir: PathBuf, broker_port: u16) -> Re
     };
 
     let options = FuzzerOptions::try_parse();
-    log::info!("Options: {:?}", options);
     let save_bb_coverage = options
         .as_ref()
         .map(|opts| opts.save_bb_coverage)
@@ -105,7 +104,7 @@ fn fuzz(corpus_dirs: &[PathBuf], objective_dir: PathBuf, broker_port: u16) -> Re
         AccMapObserver::new(StdMapObserver::from_mut_ptr(
             "edges",
             EDGES_MAP.as_mut_ptr(),
-            MAX_EDGES_NUM,
+            MAX_EDGES_FOUND,
         ))
         .save_dr_cov(save_bb_coverage)
         .max_cnt(drcov_max_execution_cnt)

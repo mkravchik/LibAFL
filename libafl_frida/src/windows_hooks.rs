@@ -1,10 +1,24 @@
 // Based on the example of setting hooks: Https://github.com/frida/frida-rust/blob/main/examples/gum/hook_open/src/lib.rs
+use std::ffi::c_void;
+
 use frida_gum::{interceptor::Interceptor, Gum, Module, NativePointer};
 use libafl_bolts::os::windows_exceptions::{
     handle_exception, IsProcessorFeaturePresent, UnhandledExceptionFilter, EXCEPTION_POINTERS,
     PROCESSOR_FEATURE_ID,
 };
 
+unsafe extern "C" fn is_processor_feature_present_detour(feature: u32) -> bool {
+    match feature {
+        0x17 => false,
+        _ => IsProcessorFeaturePresent(PROCESSOR_FEATURE_ID(feature)).as_bool(),
+    }
+}
+unsafe extern "C" fn unhandled_exception_filter_detour(
+    exception_pointers: *mut EXCEPTION_POINTERS,
+) -> i32 {
+    handle_exception(exception_pointers);
+    UnhandledExceptionFilter(exception_pointers)
+}
 /// Initialize the hooks
 pub fn initialize(gum: &Gum) {
     let is_processor_feature_present =
@@ -23,7 +37,6 @@ pub fn initialize(gum: &Gum) {
     );
 
     let mut interceptor = Interceptor::obtain(gum);
-    use std::ffi::c_void;
 
     interceptor
         .replace(
@@ -31,7 +44,7 @@ pub fn initialize(gum: &Gum) {
             NativePointer(is_processor_feature_present_detour as *mut c_void),
             NativePointer(std::ptr::null_mut()),
         )
-        .unwrap_or_else(|_| NativePointer(std::ptr::null_mut()));
+        .unwrap_or(NativePointer(std::ptr::null_mut()));
 
     interceptor
         .replace(
@@ -39,19 +52,5 @@ pub fn initialize(gum: &Gum) {
             NativePointer(unhandled_exception_filter_detour as *mut c_void),
             NativePointer(std::ptr::null_mut()),
         )
-        .unwrap_or_else(|_| NativePointer(std::ptr::null_mut()));
-
-    unsafe extern "C" fn is_processor_feature_present_detour(feature: u32) -> bool {
-        match feature {
-            0x17 => false,
-            _ => IsProcessorFeaturePresent(PROCESSOR_FEATURE_ID(feature)).as_bool(),
-        }
-    }
-
-    unsafe extern "C" fn unhandled_exception_filter_detour(
-        exception_pointers: *mut EXCEPTION_POINTERS,
-    ) -> i32 {
-        handle_exception(exception_pointers);
-        UnhandledExceptionFilter(exception_pointers)
-    }
+        .unwrap_or(NativePointer(std::ptr::null_mut()));
 }

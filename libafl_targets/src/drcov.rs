@@ -7,6 +7,7 @@ use core::ptr::addr_of;
 use std::{
     fs::File,
     io::{BufWriter, Write},
+    mem::size_of,    
     path::Path,
 };
 
@@ -193,7 +194,7 @@ impl<'a> DrCovWriterWithCounter<'a> {
                     .write_all(unsafe {
                         std::slice::from_raw_parts(
                             addr_of!(basic_block) as *const u8,
-                            std::mem::size_of::<DrCovBasicBlockEntryWithCounter>(),
+                            size_of::<DrCovBasicBlockEntryWithCounter>(),
                         )
                     })
                     .unwrap();

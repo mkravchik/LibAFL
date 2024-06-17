@@ -18,8 +18,9 @@ pub fn main() {
 
         let mut cc = ClangWrapper::new();
         if let Some(code) = cc
-            .cpp(is_cpp)
-            // silence the compiler wrapper output, needed for some configure scripts.
+            .cpp(true) // Link with C++ standard library (Frida links to it in order to hook C++ functions)
+            // .cpp(is_cpp)
+        // silence the compiler wrapper output, needed for some configure scripts.
             .silence(true)
             .parse_args(&args)
             .expect("Failed to parse the command line")

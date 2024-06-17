@@ -304,6 +304,7 @@ where
     }
 }
 
+#[allow(clippy::into_iter_without_iter)]
 impl<'a, 'it, T, const DIFFERENTIAL: bool> IntoIterator
     for &'it MultiMapObserver<'a, T, DIFFERENTIAL>
 where
@@ -317,6 +318,7 @@ where
     }
 }
 
+#[allow(clippy::into_iter_without_iter)]
 impl<'a, 'it, T, const DIFFERENTIAL: bool> IntoIterator
     for &'it mut MultiMapObserver<'a, T, DIFFERENTIAL>
 where

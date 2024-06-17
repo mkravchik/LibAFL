@@ -118,7 +118,7 @@ impl ReachabilityRuntime {
                 hooks_cnt: 0,
                 hook_indices: HashMap::new(),
                 _pinned: PhantomPinned,
-                hooks: hooks,
+                hooks,
             })),
         }
     }
@@ -188,15 +188,15 @@ impl ReachabilityRuntime {
             .insert(name.to_string(), hook_idx);
         let hook_ctx = HookCtx {
             rt: self,
-            org_fn: frida_gum::Module::find_export_by_name(Some(&lib), &name)
+            org_fn: frida_gum::Module::find_export_by_name(Some(lib), name)
                 .expect("Failed to find function"),
-            hook_idx: hook_idx,
+            hook_idx,
         };
         let hook_ctx_ptr = Box::into_raw(Box::new(hook_ctx));
 
         interceptor
             .replace(
-                frida_gum::Module::find_export_by_name(Some(&lib), &name)
+                frida_gum::Module::find_export_by_name(Some(lib), name)
                     .expect("Failed to find function"),
                 NativePointer(replacement as *mut c_void),
                 NativePointer(hook_ctx_ptr as *mut c_void),
@@ -233,7 +233,6 @@ impl ReachabilityRuntime {
             ),
             _ => {
                 log::error!("Unsupported number of parameters for function {}", name);
-                return;
             }
         }
     }
@@ -292,6 +291,7 @@ pub struct ReachabilityObserver {
 impl ReachabilityObserver {
     /// Creates a new [`ReachabilityObserver`] with the given name.
     #[must_use]
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn new<S>(observer_name: S, map: *mut u8, hooks_file: Option<&str>) -> Self
     where
         S: Into<Cow<'static, str>> + Clone,
@@ -316,7 +316,7 @@ impl ReachabilityObserver {
         Self {
             observer_name: observer_name.clone().into(),
             base: unsafe { StdMapObserver::from_mut_ptr(observer_name, map, MAP_SIZE) },
-            hooks: hooks,
+            hooks,
             invocations: Vec::new(),
         }
     }
