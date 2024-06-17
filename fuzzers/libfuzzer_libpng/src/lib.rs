@@ -92,26 +92,6 @@ fn fuzz(corpus_dirs: &[PathBuf], objective_dir: PathBuf, broker_port: u16) -> Re
     };
 
     let options = FuzzerOptions::try_parse();
-    log::info!("Options: {:?}", options );
-    let save_bb_coverage = options
-        .as_ref()
-        .map(|opts| opts.save_bb_coverage)
-        .unwrap_or(false);
-    let drcov_max_execution_cnt = options
-        .as_ref()
-        .map(|opts| opts.drcov_max_execution_cnt)
-        .unwrap_or(0);
-    let acc_observer = unsafe {
-        AccMapObserver::new(StdMapObserver::from_mut_ptr(
-            "edges",
-            EDGES_MAP.as_mut_ptr(),
-            MAX_EDGES_FOUND,
-        ))
-        .save_dr_cov(save_bb_coverage)
-        .max_cnt(drcov_max_execution_cnt)
-    };
-
-    let options = FuzzerOptions::try_parse();
     let save_bb_coverage = options
         .as_ref()
         .map(|opts| opts.save_bb_coverage)

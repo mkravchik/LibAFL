@@ -106,14 +106,14 @@ impl<'de> Visitor<'de> for PPFrameVisitor {
                 "ip" => {
                     let ip_str: String = map.next_value()?;
                     ip = Some(
-                        usize::from_str_radix(&ip_str.trim_start_matches("0x"), 16)
+                        usize::from_str_radix(ip_str.trim_start_matches("0x"), 16)
                             .map_err(de::Error::custom)?,
                     );
                 }
                 "symbol_address" => {
                     let symbol_address_str: String = map.next_value()?;
                     symbol_address = Some(
-                        usize::from_str_radix(&symbol_address_str.trim_start_matches("0x"), 16)
+                        usize::from_str_radix(symbol_address_str.trim_start_matches("0x"), 16)
                             .map_err(de::Error::custom)?,
                     );
                 }
@@ -122,7 +122,7 @@ impl<'de> Visitor<'de> for PPFrameVisitor {
                     if module_base_address_str != "unknown" {
                         module_base_address = Some(
                             usize::from_str_radix(
-                                &module_base_address_str.trim_start_matches("0x"),
+                                module_base_address_str.trim_start_matches("0x"),
                                 16,
                             )
                             .map_err(de::Error::custom)?,
@@ -157,20 +157,20 @@ impl<'de> Visitor<'de> for PPFrameVisitor {
         let ip_str = seq
             .next_element::<String>()?
             .ok_or_else(|| de::Error::invalid_length(0, &self))?;
-        let ip = usize::from_str_radix(&ip_str.trim_start_matches("0x"), 16)
+        let ip = usize::from_str_radix(ip_str.trim_start_matches("0x"), 16)
             .map_err(de::Error::custom)?;
 
         let symbol_address_str = seq
             .next_element::<String>()?
             .ok_or_else(|| de::Error::invalid_length(1, &self))?;
         let symbol_address =
-            usize::from_str_radix(&symbol_address_str.trim_start_matches("0x"), 16)
+            usize::from_str_radix(symbol_address_str.trim_start_matches("0x"), 16)
                 .map_err(de::Error::custom)?;
 
         let module_base_address_str = seq.next_element::<String>()?;
         let module_base_address_str = match module_base_address_str {
             Some(s) if s != "unknown" => Some(
-                usize::from_str_radix(&s.trim_start_matches("0x"), 16)
+                usize::from_str_radix(s.trim_start_matches("0x"), 16)
                     .map_err(de::Error::custom)?,
             ),
             _ => None,
@@ -183,7 +183,7 @@ impl<'de> Visitor<'de> for PPFrameVisitor {
             ip,
             symbol_address,
             module_base_address: module_base_address_str,
-            symbols: symbols,
+            symbols,
         })
     }
 }
@@ -215,7 +215,7 @@ impl Serialize for BacktraceMetadata {
                 module_base_address: frame.module_base_address().map(|addr| addr as usize),
                 symbols: frame
                     .symbols()
-                    .get(0)
+                    .first()
                     .map(|symbol| format!("{:?}", symbol))
                     .unwrap_or_else(|| "No symbol".to_string()),
             };
@@ -247,8 +247,8 @@ impl<'de> Visitor<'de> for BacktraceMetadataVisitor {
         // Read all elements from the sequence
         // while let Some(_) = seq.next_element::<HashMap<String, Self::Value>>()? {}
         // Read the name string and discard it
-        let _ = seq.next_element::<String>().map_err(|err| err);
-        while let Some(_) = seq.next_element::<PPFrame>().map_err(|err| err)? {}
+        let _ = seq.next_element::<String>();
+        while (seq.next_element::<PPFrame>()?).is_some() {}
         // Always return a current BacktraceMetadata.
         Ok(BacktraceMetadata::new(Backtrace::new_unresolved()))
     }
@@ -423,7 +423,7 @@ where
         //     .match_name::<BacktraceObserverWithStack>(&self.0.observer_name())
         //     .expect("A NewHashFeedbackWithStack needs a BacktraceObserverWithStack");
         let observer = observers
-            .get(&self.0.observer_handle())
+            .get(self.0.observer_handle())
             .expect("A NewHashFeedbackWithStack needs a BacktraceObserverWithStack");
 
         match observer.get_backtrace() {

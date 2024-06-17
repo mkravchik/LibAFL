@@ -4,6 +4,7 @@ use std::fs;
 use std::{
     collections::HashMap,
     hash::{BuildHasher, Hash, Hasher},
+    num::ParseIntError,
     path::PathBuf,
 };
 
@@ -128,18 +129,18 @@ where
                     if self.acc[i] == 0 {
                         continue;
                     }
-                    if pc_table.is_none() {
-                        drcov_basic_blocks.push(DrCovBasicBlock {
-                            // I need the address to point to real memory addresses
-                            start: self.curr_mod_addr + i as usize, // this is fixed in the script
-                            end: self.curr_mod_addr + i as usize, // this is fixed in the script start == end indicates to fix the start as well
-                        });
-                    } else {
+                    if let Some(pc_table) = pc_table {
                         // The addresses from PCTable are real memory addresses
                         // The module is mapped starting from the beginning of the .init section
                         drcov_basic_blocks.push(DrCovBasicBlock {
-                            start: pc_table.unwrap()[i].addr() + self.curr_mod_offset,
-                            end: pc_table.unwrap()[i].addr() + self.curr_mod_offset + 1, // this is fixed in the script
+                            start: pc_table[i].addr() + self.curr_mod_offset,
+                            end: pc_table[i].addr() + self.curr_mod_offset + 1, // this is fixed in the script
+                        });
+                    } else {
+                        drcov_basic_blocks.push(DrCovBasicBlock {
+                            // I need the address to point to real memory addresses
+                            start: self.curr_mod_addr + i, // this is fixed in the script
+                            end: self.curr_mod_addr + i, // this is fixed in the script start == end indicates to fix the start as well
                         });
                     }
 
@@ -281,9 +282,19 @@ fn get_pid_name(pid: Option<u32>) -> String {
     }
 }
 
+#[derive(Debug)]
+pub enum CollectModulesError {
+    IoError(std::io::Error),
+    ParseError(std::num::ParseIntError),
+}
+impl From<ParseIntError> for CollectModulesError {
+    fn from(err: ParseIntError) -> Self {
+        CollectModulesError::ParseError(err)
+    }
+}
 /// A utility function to collect the modules of the current process and their ranges in memory
 #[allow(unused_mut)]
-pub fn collect_modules(pid: Option<u32>) -> Result<RangeMap<usize, (u16, String)>, ()> {
+pub fn collect_modules(pid: Option<u32>) -> Result<RangeMap<usize, (u16, String)>, CollectModulesError> {
     let mut ranges = RangeMap::new();
     #[cfg(windows)]
     {
@@ -300,15 +311,15 @@ pub fn collect_modules(pid: Option<u32>) -> Result<RangeMap<usize, (u16, String)
         };
 
         let file = File::open(get_pid_name(pid));
-        if file.is_err() {
-            return Err(());
+        if let Err(file_err) = file {
+            return Err(CollectModulesError::IoError(file_err));
         }
         let reader = BufReader::new(file.unwrap());
         let mut module_id = 0;
 
         for line in reader.lines() {
             if line.is_err() {
-                continue;
+                continue
             }
             let line = line.unwrap();
             log::info!("Line: {}", line);
@@ -327,8 +338,8 @@ pub fn collect_modules(pid: Option<u32>) -> Result<RangeMap<usize, (u16, String)
             if !parts[1].contains('x') {
                 continue;
             }
-            let start = usize::from_str_radix(range_parts[0], 16).map_err(|_| ())?;
-            let end = usize::from_str_radix(range_parts[1], 16).map_err(|_| ())?;
+            let start = usize::from_str_radix(range_parts[0], 16)?;
+            let end = usize::from_str_radix(range_parts[1], 16)?;
             let name = parts[5].to_string();
 
             log::info!("Module: {} - 0x{:x} - 0x{:x}", name, start, end);
@@ -397,7 +408,7 @@ fn collect_module_offsets(pid: Option<u32>) -> Result<HashMap<String, usize>, ()
                     // Iterate over section headers to find the .init section
                     for sh in elf.section_headers {
                         let offset = sh.sh_offset as usize;
-                        if let Some(section_name) = elf.shdr_strtab.get_at(sh.sh_name as usize) {
+                        if let Some(section_name) = elf.shdr_strtab.get_at(sh.sh_name) {
                             if section_name == ".init" {
                                 log::info!(
                                     "Module: {} - 0x{:x} - 0x{:x}",
@@ -440,7 +451,7 @@ fn find_module_params(
                          // curr_mod_name = ranges.get(&0).unwrap().1.clone();
         for (_, val) in ranges.iter() {
             if val.0 == curr_mod_id {
-                curr_mod_name = val.1.clone();
+                curr_mod_name.clone_from(&val.1);
                 break;
             }
         }
@@ -487,9 +498,9 @@ where
             cnt: 0,
             max_cnt: 0,
             stored_cnt: 0,
-            ranges: ranges,
-            curr_mod_offset: curr_mod_offset.clone(),
-            curr_mod_addr: curr_mod_addr,
+            ranges,
+            curr_mod_offset,
+            curr_mod_addr,
             use_pc_table: false,
             target_pid: 0,
         }
