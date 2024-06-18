@@ -27,7 +27,7 @@ use crate::{
 use crate::{monitors::PerfFeature, state::HasClientPerfMonitor};
 
 /// Send a monitor update all 15 (or more) seconds
-const STATS_TIMEOUT_DEFAULT: Duration = Duration::from_secs(15);
+const STATS_TIMEOUT_DEFAULT: Duration = Duration::from_secs(1);
 
 /// Holds a scheduler
 pub trait HasScheduler: UsesState
@@ -477,6 +477,8 @@ where
                             time: current_time(),
                             executions: *state.executions(),
                             forward_id: None,
+                            #[cfg(all(unix, feature = "std", feature = "multi_machine"))]
+                            node_id: None,
                         },
                     )?;
                 } else {
@@ -676,6 +678,8 @@ where
                 time: current_time(),
                 executions: *state.executions(),
                 forward_id: None,
+                #[cfg(all(unix, feature = "std", feature = "multi_machine"))]
+                node_id: None,
             },
         )?;
         Ok(idx)
@@ -772,7 +776,7 @@ where
         }
     }
 
-    /// Runs the input and triggers observers and feedback
+    /// Runs the input and triggers observers
     pub fn execute_input<E, EM>(
         &mut self,
         state: &mut <Self as UsesState>::State,

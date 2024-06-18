@@ -20,6 +20,7 @@ members = [
     "utils/deexit",
     "utils/libafl_benches",
     "utils/gramatron/construct_automata",
+    "utils/desyscall",
 ]
 default-members = [
     "libafl",
@@ -36,11 +37,13 @@ exclude = [
     "utils/noaslr",
     "utils/gdb_qemu",
     "utils/libafl_fmt",
+    "utils/desyscall",
+    "utils/multi_machine_generator",
     "scripts",
 ]
 
 [workspace.package]
-version = "0.12.0"
+version = "0.13.0"
 
 [profile.release]
 lto = true

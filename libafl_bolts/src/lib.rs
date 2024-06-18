@@ -12,7 +12,6 @@
 // For `std::simd`
 #![cfg_attr(nightly, feature(portable_simd))]
 // For `core::error`
-#![cfg_attr(nightly, feature(error_in_core))]
 #![warn(clippy::cargo)]
 #![allow(ambiguous_glob_reexports)]
 #![deny(clippy::cargo_common_metadata)]
@@ -31,7 +30,8 @@
     clippy::module_name_repetitions,
     clippy::ptr_cast_constness,
     clippy::negative_feature_names,
-    clippy::too_many_lines
+    clippy::too_many_lines,
+    clippy::if_not_else
 )]
 #![cfg_attr(not(test), warn(
     missing_debug_implementations,
