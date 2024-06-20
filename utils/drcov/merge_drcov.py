@@ -27,11 +27,11 @@ class HashableDrcovBasicBlock(drcov.DrcovBasicBlock):
         self.size = block.size
 
     def __hash__(self):
-        # I remove the size from the hash, beacuse we don't know it when using PCTable and fix later
+        # I remove the size from the hash, because we don't know it when using PCTable and fix later
         return hash((self.start, self.mod_id))
 
     def __eq__(self, other):
-        if isinstance(other, HashableDrcovBasicBlock):
+        if isinstance(other, HashableDrcovBasicBlock) or isinstance(other, drcov.DrcovBasicBlock):
             return self.start == other.start and self.mod_id == other.mod_id
         return False
 
@@ -389,12 +389,15 @@ def create_merged_drcov_writer(base_file_name, aggregate, base_dir=None):
         print("Output file:", output_file)
     return DrcovFile(output_file)
 
-def merge_drcov(directory, aggregate, keep=False, output_directory=None, counters=False, fix_sizes=False):
+def merge_drcov(directory, aggregate, keep=False, output_directory=None, counters=False, fix_sizes=False, 
+                counters_only=False):
     # Start measuring the time
     start_time = time.time()
 
+    files_pattern = "*.drcov.cnt" if counters_only else "*.drcov"
+
     # List all files in the directory with .drcov extension, sorted by time, in ascending order
-    files = sorted(glob.glob(os.path.join(directory, "*.drcov")), key=os.path.getmtime)
+    files = sorted(glob.glob(os.path.join(directory, files_pattern)), key=os.path.getmtime)
 
     if files is None or len(files) == 0:
         print("No files to process")
@@ -404,6 +407,7 @@ def merge_drcov(directory, aggregate, keep=False, output_directory=None, counter
     bb_counters = defaultdict(dict)
     modules = {}
     bb_size_calcs = {}
+    common_modules = {}
 
     def write_results():
         # use the outer scope variables
@@ -420,6 +424,19 @@ def merge_drcov(directory, aggregate, keep=False, output_directory=None, counter
         bb_counters.clear()
         modules.clear()
 
+    # we need to get the modules from the first drcov file
+    if counters_only:
+        for file in files:
+            # If the same file without the .cnt extension exists, we will use it to get the modules
+            if file.endswith(".drcov.cnt"):
+                drcov_file = file[:-4]
+                if os.path.exists(drcov_file):
+                    if verbose:
+                        print(f"Using modules from {drcov_file}")
+                    common_modules = drcov.DrcovData(drcov_file).modules
+                    break
+
+
     print(f"Found {len(files)} files")
     for file in tqdm.tqdm(files):
         # Skip the files that start with merged
@@ -435,52 +452,62 @@ def merge_drcov(directory, aggregate, keep=False, output_directory=None, counter
                 print("Starting new file")
             write_results()
 
-        try:
-            DrcovData = drcov.DrcovData(file)
-        except Exception as e:
-            print("Error processing file:", file)
-            print(e)
-            continue
+        if not counters_only:
+            try:
+                DrcovData = drcov.DrcovData(file)
+            except Exception as e:
+                print("Error processing file:", file)
+                print(e)
+                continue
+            current_modules = DrcovData.modules
+            bbs = DrcovData.bbs
+        else:
+            current_modules = common_modules
+            # bbs will be set once we read the counter file
         
         cnt_reader = None
-        cnt_file = None
-        if os.path.exists(file + ".cnt"):
-            cnt_file = file + ".cnt"
+        cnt_file = file if counters_only else file + ".cnt"
+        if os.path.exists(cnt_file):
             if verbose:
                 print("Processing counter file:", cnt_file)
             try:                
                 cnt_reader = DrcovBasicBlockWithCounterReader(cnt_file)
                 cnt_reader.close()
+                if counters_only:
+                    bbs = [drcov.DrcovBasicBlock(key.start, key.size, key.mod_id) for key in cnt_reader.bbs.keys()]
             except Exception as e:
                 print("Error processing file:", file)
                 print(e)
                 continue
+        else:
+            cnt_file = None
 
         if verbose:
-            print("# of modules:", len(DrcovData.modules))
+            print("# of modules:", len(current_modules))
         if verbose:
-            print("# of basic blocks:", len(DrcovData.bbs))
+            print("# of basic blocks:", len(bbs))
         # First check we have compatible modules
-        for _, mods in DrcovData.modules.items():
-            compatible = True
-            for m in mods:
-                if not writer.check_module_compatible(m.id, m.path, m.base, m.end):
-                    if verbose:
-                        print("Incompatible module found, starting new file")
-                    write_results()
-                    compatible = False
+        if not counters_only:
+            for _, mods in current_modules.items():
+                compatible = True
+                for m in mods:
+                    if not writer.check_module_compatible(m.id, m.path, m.base, m.end):
+                        if verbose:
+                            print("Incompatible module found, starting new file")
+                        write_results()
+                        compatible = False
+                        break
+                if not compatible:
                     break
-            if not compatible:
-                break
 
-        for _, mods in DrcovData.modules.items():
+        for _, mods in current_modules.items():
             for m in mods:
                 writer.add_module(m.id, m.path, m.base, m.end)
                 modules[m.id] = {"path": m.path, "base": hex(m.base), "end": hex(m.end)}
                 if fix_sizes and m.id not in bb_size_calcs and m.id == 0: # an optimization, we don't need to calculate the size of the basic blocks for all modules
                     bb_size_calcs[m.id] = DrcovBasicBlockSizeCalculator(m.path, verbose=verbose)
 
-        for bb in tqdm.tqdm(DrcovData.bbs):
+        for bb in tqdm.tqdm(bbs):
             if verbose:
                 print(f"{hex(bb.start), hex(bb.size)}")
             bb_clone = copy(bb) # we need to clone the bb, because we will modify it
@@ -741,6 +768,7 @@ if __name__ == "__main__":
     # Generate block counters for a merged file
     parser.add_argument("-c", "--counters", action="store_true", help="Generate block counters for a merged file")
     parser.add_argument("-f", "--fix-sizes", action="store_true", help="Disassembles the .text section of the module and fixes the basic block sizes in the drcov file")
+    parser.add_argument("-co", "--counters-only", action="store_true", help="Generate merged files from .cnt files only. A single .drcov file must be present in the directory as a source for the modules")
 
     subparsers = parser.add_subparsers(dest='command')
 
@@ -780,4 +808,6 @@ if __name__ == "__main__":
     elif args.command == "pc-table":
         parsePCTable(args.input, args.verbose)
     else:
-        merge_drcov(args.directory, args.aggregate, args.keep, args.output_directory, args.counters, args.fix_sizes)
+        merge_drcov(args.directory, args.aggregate, args.keep, 
+                    args.output_directory, args.counters, 
+                    args.fix_sizes, args.counters_only)
