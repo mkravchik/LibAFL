@@ -104,7 +104,7 @@ The simplest way to merge the files:
    1. In order to maintain the counters data and to be able to process it and to display it in HTML, one needs to specify `-c`. This will produce a `merged.drcov.json` file that contains the counters for each executed basic block.
    1. When using static instrumentation, the sizes of the basic blocks are unknown. This will result in wrong line coverage displayed in HTML, as only the first file of each block will have the correct counter.The `-f` option fixes the problem by extracting the BB infromation from the binary. Thus it is recommened to use `-f` option when working with static instrumentation. 
    1. By default, the original .drcov and .drcov.cnt files are deleted. `-k` will keep them after the merge.
-   1. It is possible to create `merged.drcov` and `drcov.cnt` based on the `drcov.cnt` files only providing a single `.drcov` file (for the modules infromation missing from the .cnt files). This allows for more efficient distributed flow, so that you can send less files. Use `-co` for this mode, just make sure that at least one correct ``.drcov` is present. 
+   1. It is possible to create `merged.drcov` and `drcov.cnt` based on the `drcov.cnt` files only providing a single `.drcov` file (for the modules infromation missing from the .cnt files). This allows for more efficient distributed flow, so that you can send less files. Use `-co` for this mode, just make sure that at least one correct `.drcov` is present. 
 1. Convert Drcov to lcov. Use DynamoRio utility for that. 
 **Notes:**: 
    1. make sure to use the 64 bit utility for 64 bit targets. Example: `~/DynamoRIO-Linux-10.0.19798/tools/bin64/drcov2lcov -input ./coverage/merged.drcov -output ./coverage.info -src_filter libpng-1.6.37`

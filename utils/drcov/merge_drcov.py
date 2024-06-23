@@ -684,6 +684,8 @@ def symbolize(args):
                         parts = lines[i * 3 + 1].strip().split(":")
                         if len(parts) > 1:
                             file = parts[0].strip()
+                            if not file.startswith("??"):
+                                file = os.path.abspath(file)
                             line = int(parts[1].strip())
                             # NOTE - we don't have a way to reflect the column number in the coverage.info file
                             if file in coverage_info:
