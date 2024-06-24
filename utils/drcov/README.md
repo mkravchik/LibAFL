@@ -13,9 +13,9 @@ Original DrCov files have a rigid format that does not include the counters, thu
 DynamoRio collects DrCov using its runtime instrumentation. In LibAFL, we support collecting it using both compile-time and runtime instrumentation. This allows for a unified backend processing and analytics.
 
 ## Static instrumentation
-LibAFL uses llvm coverage instrumentation when compiling form sources. This is done by using a compiler wrapper libafl_cc that adds the needed options to the clang's command line. While regular LibAFL coverage adds just `-fsanitize-coverage=trace-pc-guard`, for DrCov coverage the libafl_cc should add `-fsanitize-coverage=pc-table,bb,trace-pc-guard`.
+LibAFL uses llvm coverage instrumentation when compiling form sources. This is done by using a compiler wrapper libafl_cc that adds the needed options to the clang's command line. While regular LibAFL coverage adds just `-fsanitize-coverage=trace-pc-guard`, for DrCov coverage the libafl_cc should add `-fsanitize-coverage=pc-table,no-prune,trace-pc-guard`.
 The meaning of the additions is: 
- - `bb` causes the compiler to instrument each basic block (the default is 'edge' which introduces artificial BBs to track the edges that are known statically).
+ - `no-prune` causes the compiler to instrument each basic block including those that it would optimize-out otherwise.
   - `pc-table` adds to the result ELF file a section that holds offsets of each BB. Without it, trace-pc-guard instrumentation does not provide any address information, just inserts callbacks to thecoverage instrumentation.
 
 It is also important to compile the source with the debug information (`-g`) to be able to map the addresses to the source code lines.
@@ -102,9 +102,9 @@ The simplest way to merge the files:
 **Notes:** 
    1. Merging will produce a `merged.drcov`, that can be processed by DrCov utilities. The produced files are in the old, version 2 format, thus some utilitites can warn about it. 
    1. In order to maintain the counters data and to be able to process it and to display it in HTML, one needs to specify `-c`. This will produce a `merged.drcov.json` file that contains the counters for each executed basic block.
-   1. When using static instrumentation, the sizes of the basic blocks are unknown. This will result in wrong line coverage displayed in HTML, as only the first file of each block will have the correct counter.The `-f` option fixes the problem by extracting the BB infromation from the binary. Thus it is recommened to use `-f` option when working with static instrumentation. 
+   1. When using static instrumentation, the sizes of the basic blocks are unknown. This will result in wrong line coverage displayed in HTML, as only the first file of each block will have the correct counter.The `-f` option fixes the problem by extracting the BB information from the binary. Thus it is recommened to use `-f` option when working with static instrumentation. 
    1. By default, the original .drcov and .drcov.cnt files are deleted. `-k` will keep them after the merge.
-   1. It is possible to create `merged.drcov` and `drcov.cnt` based on the `drcov.cnt` files only providing a single `.drcov` file (for the modules infromation missing from the .cnt files). This allows for more efficient distributed flow, so that you can send less files. Use `-co` for this mode, just make sure that at least one correct `.drcov` is present. 
+   1. It is possible to create `merged.drcov` and `drcov.cnt` based on the `drcov.cnt` files only providing a single `.drcov` file (for the modules information missing from the .cnt files). This allows for more efficient distributed flow, so that you can send less files. Use `-co` for this mode, just make sure that at least one correct `.drcov` is present. 
 1. Convert Drcov to lcov. Use DynamoRio utility for that. 
 **Notes:**: 
    1. make sure to use the 64 bit utility for 64 bit targets. Example: `~/DynamoRIO-Linux-10.0.19798/tools/bin64/drcov2lcov -input ./coverage/merged.drcov -output ./coverage.info -src_filter libpng-1.6.37`

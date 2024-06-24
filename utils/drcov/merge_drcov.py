@@ -670,7 +670,7 @@ def symbolize(args):
                 output = p.read()
                 p.close()
                 if args.verbose:
-                    print(f"  {addresses_str} (size{v1[0]}): {v1[1]} times")
+                    print(f"  {addresses_str} (size {v1[0]}): {v1[1]} times")
                     print(output)
                 if coverage_info is not None:
                     # The llvm-symbolizer output is in the following format (for each address):
@@ -694,13 +694,17 @@ def symbolize(args):
                                         print(f"    Line {line} not found in coverage info file, adding it")
                                 coverage_info[file][line] = v1[1]
                                 if args.verbose: 
-                                    print(f"    Line {line}: {coverage_info[file][line]} times")
+                                    print(f"{addr}    Line {line}: {coverage_info[file][line]} times")
                             else:
                                 if file != "??":
-                                    if args.verbose:
-                                        print(f"    File {file} not found in coverage info file, adding it")
-                                    coverage_info[file] = defaultdict(int)
-                                    coverage_info[file][line] = v1[1]
+                                    if args.coverage_info is None:
+                                        if args.verbose:
+                                            print(f"    File {file} not found in coverage info file, adding it")
+                                        coverage_info[file] = defaultdict(int)
+                                        coverage_info[file][line] = v1[1]
+                                    else:
+                                        if args.verbose:
+                                            print(f"    File {file} not found in coverage info file, skipping")
                             
                             # # Symbolize using pyelftools
                             # pfile, pline = py_symbolizers[mod_path].get_file_line(int(k1, 16))
