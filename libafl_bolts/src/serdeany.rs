@@ -1,29 +1,32 @@
 //! Poor-rust-man's downcasts for stuff we send over the wire (or shared maps)
 
+#[cfg(feature = "stable_anymap")]
+use alloc::borrow::Cow;
 use alloc::boxed::Box;
-#[cfg(feature = "unsafe_stable_anymap")]
-use alloc::string::{String, ToString};
-#[cfg(feature = "unsafe_stable_anymap")]
+#[cfg(feature = "stable_anymap")]
 use core::any::type_name;
-#[cfg(not(feature = "unsafe_stable_anymap"))]
+#[cfg(not(feature = "stable_anymap"))]
 use core::any::TypeId;
 use core::{any::Any, fmt::Debug};
 
 use serde::{de::DeserializeSeed, Deserialize, Deserializer, Serialize, Serializer};
 pub use serdeany_registry::*;
 
-#[cfg(not(feature = "unsafe_stable_anymap"))]
+#[cfg(not(feature = "stable_anymap"))]
 use crate::anymap::unpack_type_id;
 
 /// The type of a stored type in this anymap (`u128`)
-#[cfg(not(feature = "unsafe_stable_anymap"))]
+#[cfg(not(feature = "stable_anymap"))]
 pub type TypeRepr = u128;
 
 /// The type of a stored type in this anymap (`String`)
-#[cfg(feature = "unsafe_stable_anymap")]
-pub type TypeRepr = String;
+#[cfg(feature = "stable_anymap")]
+pub type TypeRepr = Cow<'static, str>;
 
-#[cfg(not(feature = "unsafe_stable_anymap"))]
+/// Error string when no types at all have been registered yet.
+pub(crate) const ERR_EMPTY_TYPES_REGISTER: &str = "Empty types registry. Please enable the `serdeany_autoreg` feature in libafl_bolts or register all required types manually using RegistryBuilder::register().";
+
+#[cfg(not(feature = "stable_anymap"))]
 fn type_repr<T>() -> TypeRepr
 where
     T: 'static,
@@ -31,7 +34,7 @@ where
     unpack_type_id(TypeId::of::<T>())
 }
 
-#[cfg(not(feature = "unsafe_stable_anymap"))]
+#[cfg(not(feature = "stable_anymap"))]
 fn type_repr_owned<T>() -> TypeRepr
 where
     T: 'static,
@@ -39,24 +42,26 @@ where
     unpack_type_id(TypeId::of::<T>())
 }
 
-#[cfg(feature = "unsafe_stable_anymap")]
+#[cfg(feature = "stable_anymap")]
 fn type_repr_owned<T>() -> TypeRepr {
-    type_name::<T>().to_string()
+    Cow::Borrowed(type_name::<T>())
 }
 
-#[cfg(feature = "unsafe_stable_anymap")]
+#[cfg(feature = "stable_anymap")]
 fn type_repr<T>() -> &'static str {
     type_name::<T>()
 }
 
 /// A (de)serializable Any trait
 pub trait SerdeAny: Any + erased_serde::Serialize + Debug {
-    /// returns this as Any trait
+    /// Returns this type as [`Any`] trait.
     fn as_any(&self) -> &dyn Any;
-    /// returns this as mutable Any trait
+    /// Returns this as mutable [`Any`] trait.
     fn as_any_mut(&mut self) -> &mut dyn Any;
-    /// returns this as boxed Any trait
+    /// Returns this as boxed [`Any`] trait.
     fn as_any_boxed(self: Box<Self>) -> Box<dyn Any>;
+    /// Returns the [`core::any::type_name`] of this type.
+    fn type_name(&self) -> &'static str;
 }
 
 /// Wrap a type for serialization
@@ -81,7 +86,7 @@ pub type DeserializeCallback<B> =
     fn(&mut dyn erased_serde::Deserializer) -> Result<Box<B>, erased_serde::Error>;
 
 /// Callback struct for deserialization of a [`SerdeAny`] type.
-#[allow(missing_debug_implementations)]
+#[expect(missing_debug_implementations)]
 pub struct DeserializeCallbackSeed<B>
 where
     B: ?Sized,
@@ -119,7 +124,7 @@ pub mod serdeany_registry {
         hash_map::{Values, ValuesMut},
         HashMap,
     };
-    use serde::{Deserialize, Serialize};
+    use serde::{de, Deserialize, Serialize};
 
     use crate::{
         serdeany::{
@@ -129,13 +134,14 @@ pub mod serdeany_registry {
         Error,
     };
 
-    /// A [`HashMap`] that maps from [`TypeRepr`] to a deserializer and its [`TypeId`].
+    /// A [`HashMap`] that maps from [`TypeRepr`] to a deserializer and its [`TypeRepr`].
+    /// We store the [`TypeId`] to assert we don't have duplicate types in the case of the `stable_anymap` feature.
     type DeserializeCallbackMap = HashMap<TypeRepr, (DeserializeCallback<dyn SerdeAny>, TypeId)>;
 
     /// Visitor object used internally for the [`crate::serdeany::SerdeAny`] registry.
     #[derive(Debug)]
     pub struct BoxDynVisitor {}
-    #[allow(unused_qualifications)]
+    #[expect(unused_qualifications)]
     impl<'de> serde::de::Visitor<'de> for BoxDynVisitor {
         type Value = Box<dyn crate::serdeany::SerdeAny>;
 
@@ -148,13 +154,16 @@ pub mod serdeany_registry {
             V: serde::de::SeqAccess<'de>,
         {
             let id: TypeRepr = visitor.next_element()?.unwrap();
+
+            let registry = &raw const REGISTRY;
             let cb = unsafe {
-                REGISTRY
+                (*registry)
                     .deserializers
                     .as_ref()
-                    .expect("Empty types registry")
+                    .ok_or_else(||
+                        de::Error::custom(super::ERR_EMPTY_TYPES_REGISTER))?
                     .get(&id)
-                    .expect("Cannot deserialize an unregistered type")
+                    .ok_or_else(|| de::Error::custom(format_args!("Cannot deserialize the unregistered type with id {id}. Enable the `serde_autoreg` feature in libafl_bolts or register all requried types manually.")))?
                     .0
             };
             let seed = DeserializeCallbackSeed::<dyn crate::serdeany::SerdeAny> { cb };
@@ -163,17 +172,15 @@ pub mod serdeany_registry {
         }
     }
 
-    #[allow(unused_qualifications)]
     struct Registry {
         deserializers: Option<DeserializeCallbackMap>,
         finalized: bool,
     }
 
-    #[allow(unused_qualifications)]
     impl Registry {
         pub fn register<T>(&mut self)
         where
-            T: crate::serdeany::SerdeAny + Serialize + serde::de::DeserializeOwned,
+            T: SerdeAny + Serialize + de::DeserializeOwned,
         {
             assert!(!self.finalized, "Registry is already finalized!");
 
@@ -187,8 +194,10 @@ pub mod serdeany_registry {
                     )
                 });
 
-            #[cfg(feature = "unsafe_stable_anymap")]
-            assert_eq!(_entry.1, TypeId::of::<T>(), "Fatal safety error: TypeId of type {} is not equals to the deserializer's TypeId for this type! Two registered types have the same type_name!", type_repr::<T>());
+            // We assert that only one element with the given TypeId is in the map.
+            // This is only necessary for stable_anymap where we don't directly use the TypeId, but the type_name instead.
+            #[cfg(feature = "stable_anymap")]
+            assert_eq!(_entry.1, TypeId::of::<T>(), "Fatal safety error: TypeId of type {} is not equal to the deserializer's TypeId for this type! Two registered types have the same type_name!", type_repr::<T>());
         }
 
         pub fn finalize(&mut self) {
@@ -206,7 +215,7 @@ pub mod serdeany_registry {
     #[derive(Debug)]
     pub struct RegistryBuilder {}
 
-    #[allow(unused_qualifications)]
+    #[expect(unused_qualifications)]
     impl RegistryBuilder {
         /// Register a given struct type for trait object (de)serialization
         ///
@@ -217,8 +226,9 @@ pub mod serdeany_registry {
         where
             T: crate::serdeany::SerdeAny + Serialize + serde::de::DeserializeOwned,
         {
+            let registry = &raw mut REGISTRY;
             unsafe {
-                REGISTRY.register::<T>();
+                (*registry).register::<T>();
             }
         }
 
@@ -227,16 +237,17 @@ pub mod serdeany_registry {
         /// # Safety
         /// This may never be called concurrently or at the same time as `register`.
         /// It dereferences the `REGISTRY` hashmap and adds the given type to it.
-        pub fn finalize() {
+        pub unsafe fn finalize() {
+            let registry = &raw mut REGISTRY;
             unsafe {
-                REGISTRY.finalize();
+                (*registry).finalize();
             }
         }
     }
 
     /// A (de)serializable anymap containing (de)serializable trait objects registered
     /// in the registry
-    #[allow(clippy::unsafe_derive_deserialize)]
+    #[expect(clippy::unsafe_derive_deserialize)]
     #[derive(Debug, Serialize, Deserialize)]
     pub struct SerdeAnyMap {
         map: HashMap<TypeRepr, Box<dyn SerdeAny>>,
@@ -251,23 +262,7 @@ pub mod serdeany_registry {
         }
     }
 
-    /*
-    #[cfg(feature = "anymap_debug")]
-    impl fmt::Debug for SerdeAnyMap {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            let json = serde_json::to_string(&self);
-            write!(f, "SerdeAnyMap: [{:?}]", json)
-        }
-    }
-
-    #[cfg(not(feature = "anymap_debug"))]
-    impl fmt::Debug for SerdeAnyMap {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            write!(f, "SerdeAnymap with {} elements", self.len())
-        }
-    }*/
-
-    #[allow(unused_qualifications)]
+    #[expect(unused_qualifications)]
     impl SerdeAnyMap {
         /// Get an element from the map.
         #[must_use]
@@ -277,7 +272,7 @@ pub mod serdeany_registry {
             T: crate::serdeany::SerdeAny,
         {
             let type_repr = type_repr::<T>();
-            #[cfg(not(feature = "unsafe_stable_anymap"))]
+            #[cfg(not(feature = "stable_anymap"))]
             let type_repr = &type_repr;
 
             self.map
@@ -293,7 +288,7 @@ pub mod serdeany_registry {
             T: crate::serdeany::SerdeAny,
         {
             let type_repr = type_repr::<T>();
-            #[cfg(not(feature = "unsafe_stable_anymap"))]
+            #[cfg(not(feature = "stable_anymap"))]
             let type_repr = &type_repr;
 
             self.map
@@ -309,7 +304,7 @@ pub mod serdeany_registry {
             T: crate::serdeany::SerdeAny,
         {
             let type_repr = type_repr::<T>();
-            #[cfg(not(feature = "unsafe_stable_anymap"))]
+            #[cfg(not(feature = "stable_anymap"))]
             let type_repr = &type_repr;
 
             self.map
@@ -338,7 +333,7 @@ pub mod serdeany_registry {
 
         /// Get an entry to an element in this map.
         #[inline]
-        #[allow(unused_qualifications)]
+        #[expect(unused_qualifications)]
         pub fn raw_entry_mut<T>(
             &mut self,
         ) -> hashbrown::hash_map::RawEntryMut<
@@ -351,15 +346,16 @@ pub mod serdeany_registry {
             T: crate::serdeany::SerdeAny,
         {
             let type_repr = type_repr::<T>();
-            #[cfg(not(feature = "unsafe_stable_anymap"))]
+            #[cfg(not(feature = "stable_anymap"))]
             let type_repr = &type_repr;
 
+            let registry = &raw const REGISTRY;
             assert!(
                         unsafe {
-                            REGISTRY
+                            (*registry)
                                 .deserializers
                                 .as_ref()
-                                .expect("Empty types registry")
+                                .expect(super::ERR_EMPTY_TYPES_REGISTER)
                                 .get(type_repr)
                                 .is_some()
                         },
@@ -410,7 +406,7 @@ pub mod serdeany_registry {
             T: crate::serdeany::SerdeAny,
         {
             let type_repr = type_repr::<T>();
-            #[cfg(not(feature = "unsafe_stable_anymap"))]
+            #[cfg(not(feature = "stable_anymap"))]
             let type_repr = &type_repr;
 
             self.map.contains_key(type_repr)
@@ -432,8 +428,8 @@ pub mod serdeany_registry {
     }
 
     /// A serializable [`HashMap`] wrapper for [`crate::serdeany::SerdeAny`] types, addressable by name.
-    #[allow(clippy::unsafe_derive_deserialize)]
-    #[allow(unused_qualifications)]
+    #[expect(clippy::unsafe_derive_deserialize)]
+    #[expect(unused_qualifications)]
     #[derive(Debug, Serialize, Deserialize)]
     pub struct NamedSerdeAnyMap {
         map: HashMap<TypeRepr, HashMap<String, Box<dyn crate::serdeany::SerdeAny>>>,
@@ -448,7 +444,7 @@ pub mod serdeany_registry {
         }
     }
 
-    #[allow(unused_qualifications)]
+    #[expect(unused_qualifications)]
     impl NamedSerdeAnyMap {
         /// Get an element by name
         #[must_use]
@@ -458,7 +454,7 @@ pub mod serdeany_registry {
             T: crate::serdeany::SerdeAny,
         {
             let type_repr = type_repr::<T>();
-            #[cfg(not(feature = "unsafe_stable_anymap"))]
+            #[cfg(not(feature = "stable_anymap"))]
             let type_repr = &type_repr;
 
             match self.map.get(type_repr) {
@@ -475,7 +471,7 @@ pub mod serdeany_registry {
             T: crate::serdeany::SerdeAny,
         {
             let type_repr = type_repr::<T>();
-            #[cfg(not(feature = "unsafe_stable_anymap"))]
+            #[cfg(not(feature = "stable_anymap"))]
             let type_repr = &type_repr;
 
             match self.map.get_mut(type_repr) {
@@ -494,7 +490,7 @@ pub mod serdeany_registry {
             T: crate::serdeany::SerdeAny,
         {
             let type_repr = type_repr::<T>();
-            #[cfg(not(feature = "unsafe_stable_anymap"))]
+            #[cfg(not(feature = "stable_anymap"))]
             let type_repr = &type_repr;
 
             match self.map.get_mut(type_repr) {
@@ -507,9 +503,9 @@ pub mod serdeany_registry {
 
         /// Get all elements of a type contained in this map.
         #[must_use]
-        #[allow(unused_qualifications)]
+        #[expect(unused_qualifications)]
         #[inline]
-        #[allow(clippy::type_complexity)]
+        #[expect(clippy::type_complexity)]
         pub fn get_all<T>(
             &self,
         ) -> Option<
@@ -522,10 +518,10 @@ pub mod serdeany_registry {
             T: crate::serdeany::SerdeAny,
         {
             let type_repr = type_repr::<T>();
-            #[cfg(not(feature = "unsafe_stable_anymap"))]
+            #[cfg(not(feature = "stable_anymap"))]
             let type_repr = &type_repr;
 
-            #[allow(clippy::manual_map)]
+            #[expect(clippy::manual_map)]
             match self.map.get(type_repr) {
                 None => None,
                 Some(h) => Some(h.values().map(|x| x.as_any().downcast_ref::<T>().unwrap())),
@@ -534,8 +530,8 @@ pub mod serdeany_registry {
 
         /// Get all elements contained in this map, as mut.
         #[inline]
-        #[allow(unused_qualifications)]
-        #[allow(clippy::type_complexity)]
+        #[expect(unused_qualifications)]
+        #[expect(clippy::type_complexity)]
         pub fn get_all_mut<T>(
             &mut self,
         ) -> Option<
@@ -548,10 +544,10 @@ pub mod serdeany_registry {
             T: crate::serdeany::SerdeAny,
         {
             let type_repr = type_repr::<T>();
-            #[cfg(not(feature = "unsafe_stable_anymap"))]
+            #[cfg(not(feature = "stable_anymap"))]
             let type_repr = &type_repr;
 
-            #[allow(clippy::manual_map)]
+            #[expect(clippy::manual_map)]
             match self.map.get_mut(type_repr) {
                 None => None,
                 Some(h) => Some(
@@ -563,7 +559,7 @@ pub mod serdeany_registry {
 
         /// Run `func` for each element in this map.
         #[inline]
-        #[allow(unused_qualifications)]
+        #[expect(unused_qualifications)]
         pub fn for_each<
             F: FnMut(&TypeRepr, &Box<dyn crate::serdeany::SerdeAny>) -> Result<(), Error>,
         >(
@@ -596,7 +592,7 @@ pub mod serdeany_registry {
 
         /// Insert an element into this map.
         #[inline]
-        #[allow(unused_qualifications)]
+        #[expect(unused_qualifications)]
         pub fn insert<T>(&mut self, name: &str, val: T)
         where
             T: crate::serdeany::SerdeAny,
@@ -606,7 +602,7 @@ pub mod serdeany_registry {
 
         /// Get a reference to the type map.
         #[inline]
-        #[allow(unused_qualifications)]
+        #[expect(unused_qualifications)]
         fn outer_map_mut<T>(
             &mut self,
         ) -> &mut hashbrown::hash_map::HashMap<String, Box<dyn SerdeAny + 'static>>
@@ -614,15 +610,15 @@ pub mod serdeany_registry {
             T: crate::serdeany::SerdeAny,
         {
             let type_repr = type_repr::<T>();
-            #[cfg(not(feature = "unsafe_stable_anymap"))]
+            #[cfg(not(feature = "stable_anymap"))]
             let type_repr = &type_repr;
-
+            let registry = &raw const REGISTRY;
             assert!(
                         unsafe {
-                            REGISTRY
+                            (*registry)
                                 .deserializers
                                 .as_ref()
-                                .expect("Empty types registry")
+                                .expect(super::ERR_EMPTY_TYPES_REGISTER)
                                 .get(type_repr)
                                 .is_some()
                         },
@@ -640,7 +636,7 @@ pub mod serdeany_registry {
         /// Get an entry to an element into this map.
         /// Prefer [`Self::raw_entry_mut`] as it won't need an owned key.
         #[inline]
-        #[allow(unused_qualifications)]
+        #[expect(unused_qualifications)]
         fn entry<T>(
             &mut self,
             name: String,
@@ -658,7 +654,7 @@ pub mod serdeany_registry {
 
         /// Get a raw entry to an element into this map.
         #[inline]
-        #[allow(unused_qualifications)]
+        #[expect(unused_qualifications)]
         fn raw_entry_mut<T>(
             &mut self,
             name: &str,
@@ -721,7 +717,7 @@ pub mod serdeany_registry {
             T: crate::serdeany::SerdeAny,
         {
             let type_repr = type_repr::<T>();
-            #[cfg(not(feature = "unsafe_stable_anymap"))]
+            #[cfg(not(feature = "stable_anymap"))]
             let type_repr = &type_repr;
 
             self.map.contains_key(type_repr)
@@ -735,7 +731,7 @@ pub mod serdeany_registry {
             T: crate::serdeany::SerdeAny,
         {
             let type_repr = type_repr::<T>();
-            #[cfg(not(feature = "unsafe_stable_anymap"))]
+            #[cfg(not(feature = "stable_anymap"))]
             let type_repr = &type_repr;
 
             match self.map.get(type_repr) {
@@ -760,7 +756,7 @@ pub mod serdeany_registry {
     }
 }
 
-#[allow(unused_qualifications)]
+#[expect(unused_qualifications)]
 impl Serialize for dyn crate::serdeany::SerdeAny {
     fn serialize<S>(&self, se: S) -> Result<S::Ok, S::Error>
     where
@@ -768,15 +764,24 @@ impl Serialize for dyn crate::serdeany::SerdeAny {
     {
         use serde::ser::SerializeSeq;
 
-        let id = crate::anymap::unpack_type_id(self.type_id());
+        #[cfg(not(feature = "stable_anymap"))]
+        let type_id = crate::anymap::unpack_type_id(self.type_id());
+        #[cfg(not(feature = "stable_anymap"))]
+        let type_id = &type_id;
+
+        // For the stable anymap, we use the `type_name` as type id.
+        // Of course this may go wrong... :)
+        #[cfg(feature = "stable_anymap")]
+        let type_id = self.type_name();
+
         let mut seq = se.serialize_seq(Some(2))?;
-        seq.serialize_element(&id)?;
+        seq.serialize_element(type_id)?;
         seq.serialize_element(&crate::serdeany::Wrap(self))?;
         seq.end()
     }
 }
 
-#[allow(unused_qualifications)]
+#[expect(unused_qualifications)]
 impl<'de> Deserialize<'de> for Box<dyn crate::serdeany::SerdeAny> {
     fn deserialize<D>(deserializer: D) -> Result<Box<dyn crate::serdeany::SerdeAny>, D::Error>
     where
@@ -818,6 +823,26 @@ macro_rules! create_register {
     ($struct_type:ty) => {};
 }
 
+/// Manually register a `SerdeAny` type in the [`RegistryBuilder`]
+///
+/// Do nothing with the `serdeany_autoreg` feature, as this will be previously registered by ctor.
+#[cfg(all(feature = "serdeany_autoreg", not(miri)))]
+#[macro_export]
+macro_rules! create_manual_register {
+    ($struct_type:ty) => {};
+}
+
+/// Manually register a `SerdeAny` type in the [`RegistryBuilder`]
+///
+/// Do nothing with the `serdeany_autoreg` feature, as this will be previously registered by ctor.
+#[cfg(not(all(feature = "serdeany_autoreg", not(miri))))]
+#[macro_export]
+macro_rules! create_manual_register {
+    ($struct_type:ty) => {
+        $crate::serdeany::RegistryBuilder::register::<$struct_type>();
+    };
+}
+
 /// Implement a [`SerdeAny`], registering it in the [`RegistryBuilder`] when on std
 #[macro_export]
 macro_rules! impl_serdeany {
@@ -840,9 +865,12 @@ macro_rules! impl_serdeany {
             ) -> $crate::alloc::boxed::Box<dyn ::core::any::Any> {
                 self
             }
+
+            fn type_name(&self) -> &'static str {
+                core::any::type_name::<Self>()
+            }
         }
 
-        #[cfg(any(not(feature = "serdeany_autoreg"), miri))]
         impl< $( $lt $( : $clt $(+ $dlt )* )? ),+ > $struct_name < $( $lt ),+ > {
 
             /// Manually register this type at a later point in time
@@ -850,7 +878,9 @@ macro_rules! impl_serdeany {
             /// # Safety
             /// This may never be called concurrently as it dereferences the `RegistryBuilder` without acquiring a lock.
             pub unsafe fn register() {
-                $crate::serdeany::RegistryBuilder::register::<$struct_name < $( $lt ),+ >>();
+                $(
+                    $crate::create_manual_register!($struct_name < $( $opt ),+ >);
+                )*
             }
         }
 
@@ -877,17 +907,20 @@ macro_rules! impl_serdeany {
             ) -> $crate::alloc::boxed::Box<dyn ::core::any::Any> {
                 self
             }
+
+            fn type_name(&self) -> &'static str {
+                core::any::type_name::<Self>()
+            }
         }
 
-        #[cfg(any(not(feature = "serdeany_autoreg"), miri))]
         impl $struct_name {
             /// Manually register this type at a later point in time
             ///
             /// # Safety
             /// This may never be called concurrently as it dereferences the `RegistryBuilder` without acquiring a lock.
-            #[allow(unused)]
+            #[expect(unused)]
             pub unsafe fn register() {
-                $crate::serdeany::RegistryBuilder::register::<$struct_name>();
+                $crate::create_manual_register!($struct_name);
             }
         }
 

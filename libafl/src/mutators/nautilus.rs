@@ -1,5 +1,5 @@
 //! Mutators for the `Nautilus` grammmar fuzzer
-
+//! See <https://www.ndss-symposium.org/ndss-paper/nautilus-fishing-for-deep-bugs-with-grammars/>
 use alloc::borrow::Cow;
 use core::fmt::Debug;
 
@@ -162,7 +162,7 @@ impl Debug for NautilusSpliceMutator<'_> {
 
 impl<S> Mutator<NautilusInput, S> for NautilusSpliceMutator<'_>
 where
-    S: HasCorpus<Input = NautilusInput> + HasMetadata + HasRand,
+    S: HasCorpus + HasMetadata + HasRand,
 {
     fn mutate(
         &mut self,

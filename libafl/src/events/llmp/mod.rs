@@ -13,15 +13,15 @@ use libafl_bolts::{
     shmem::{NopShMemProvider, ShMemProvider},
     ClientId,
 };
-use log::debug;
 use serde::Deserialize;
 
 use crate::{
+    corpus::Corpus,
     events::{CustomBufEventResult, CustomBufHandlerFn, Event, EventFirer},
     executors::{Executor, HasObservers},
     fuzzer::{EvaluatorObservers, ExecutionProcessor},
     inputs::{Input, InputConverter, NopInput, NopInputConverter, UsesInput},
-    state::{HasExecutions, NopState, State, UsesState},
+    state::{HasCorpus, HasExecutions, NopState, State, Stoppable, UsesState},
     Error, HasMetadata,
 };
 
@@ -254,7 +254,7 @@ where
 
 impl<DI, IC, ICB, S, SP> LlmpEventConverter<DI, IC, ICB, S, SP>
 where
-    S: UsesInput + HasExecutions + HasMetadata,
+    S: UsesInput + HasExecutions + HasMetadata + Stoppable + HasCorpus,
     SP: ShMemProvider,
     IC: InputConverter<From = S::Input, To = DI>,
     ICB: InputConverter<From = DI, To = S::Input>,
@@ -294,22 +294,24 @@ where
         event: Event<DI>,
     ) -> Result<(), Error>
     where
-        E: Executor<EM, Z> + HasObservers<State = S>,
+        E: Executor<EM, Z, State = S> + HasObservers,
         EM: UsesState<State = S> + EventFirer,
+        S::Corpus: Corpus<Input = S::Input>,
         for<'a> E::Observers: Deserialize<'a>,
-        Z: ExecutionProcessor<E::Observers, State = S> + EvaluatorObservers<E::Observers>,
+        Z: ExecutionProcessor<EM, <S::Corpus as Corpus>::Input, E::Observers, S>
+            + EvaluatorObservers<E, EM, <S::Corpus as Corpus>::Input, S>,
     {
         match event {
             Event::NewTestcase {
                 input, forward_id, ..
             } => {
-                debug!("Received new Testcase to convert from {client_id:?} (forward {forward_id:?}, forward {forward_id:?})");
+                log::debug!("Received new Testcase to convert from {client_id:?} (forward {forward_id:?}, forward {forward_id:?})");
 
                 let Some(converter) = self.converter_back.as_mut() else {
                     return Ok(());
                 };
 
-                let res = fuzzer.evaluate_input_with_observers::<E, EM>(
+                let res = fuzzer.evaluate_input_with_observers(
                     state,
                     executor,
                     manager,
@@ -330,6 +332,7 @@ where
                 }
                 Ok(())
             }
+            Event::Stop => Ok(()),
             _ => Err(Error::unknown(format!(
                 "Received illegal message that message should not have arrived: {:?}.",
                 event.name()
@@ -338,7 +341,6 @@ where
     }
 
     /// Handle arriving events in the client
-    #[allow(clippy::unused_self)]
     pub fn process<E, EM, Z>(
         &mut self,
         fuzzer: &mut Z,
@@ -347,10 +349,12 @@ where
         manager: &mut EM,
     ) -> Result<usize, Error>
     where
-        E: Executor<EM, Z> + HasObservers<State = S>,
+        E: Executor<EM, Z, State = S> + HasObservers,
         EM: UsesState<State = S> + EventFirer,
+        S::Corpus: Corpus<Input = S::Input>,
         for<'a> E::Observers: Deserialize<'a>,
-        Z: ExecutionProcessor<E::Observers, State = S> + EvaluatorObservers<E::Observers>,
+        Z: ExecutionProcessor<EM, <S::Corpus as Corpus>::Input, E::Observers, S>
+            + EvaluatorObservers<E, EM, <S::Corpus as Corpus>::Input, S>,
     {
         // TODO: Get around local event copy by moving handle_in_client
         let self_id = self.llmp.sender().id();
@@ -377,7 +381,7 @@ where
             };
 
             let event: Event<DI> = postcard::from_bytes(event_bytes)?;
-            debug!("Processor received message {}", event.name_detailed());
+            log::debug!("Processor received message {}", event.name_detailed());
             self.handle_in_client(fuzzer, executor, state, manager, client_id, event)?;
             count += 1;
         }
@@ -431,7 +435,6 @@ where
                 corpus_size,
                 observers_buf,
                 time,
-                executions,
                 forward_id,
                 #[cfg(all(unix, feature = "std", feature = "multi_machine"))]
                 node_id,
@@ -442,7 +445,6 @@ where
                 corpus_size,
                 observers_buf,
                 time,
-                executions,
                 forward_id,
                 #[cfg(all(unix, feature = "std", feature = "multi_machine"))]
                 node_id,
@@ -490,7 +492,6 @@ where
                 corpus_size,
                 observers_buf,
                 time,
-                executions,
                 forward_id,
                 #[cfg(all(unix, feature = "std", feature = "multi_machine"))]
                 node_id,
@@ -501,7 +502,6 @@ where
                 corpus_size,
                 observers_buf,
                 time,
-                executions,
                 forward_id,
                 #[cfg(all(unix, feature = "std", feature = "multi_machine"))]
                 node_id,

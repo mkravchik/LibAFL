@@ -1,5 +1,5 @@
 //! Functionality regarding binary-only coverage collection.
-use core::ptr::addr_of_mut;
+
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -62,7 +62,7 @@ impl FridaRuntime for CoverageRuntime {
     fn init(
         &mut self,
         _gum: &frida_gum::Gum,
-        ranges: &RangeMap<usize, (u16, String)>,
+        _ranges: &RangeMap<u64, (u16, String)>,
         _module_map: &Rc<ModuleMap>,
     ) {
         if self.save_dr_cov {
@@ -74,17 +74,11 @@ impl FridaRuntime for CoverageRuntime {
 
     fn deinit(&mut self, _gum: &frida_gum::Gum) {}
 
-    fn pre_exec<I: libafl::inputs::Input + libafl::inputs::HasTargetBytes>(
-        &mut self,
-        _input: &I,
-    ) -> Result<(), libafl::Error> {
+    fn pre_exec(&mut self, _input_bytes: &[u8]) -> Result<(), libafl::Error> {
         Ok(())
     }
 
-    fn post_exec<I: libafl::inputs::Input + libafl::inputs::HasTargetBytes>(
-        &mut self,
-        input: &I,
-    ) -> Result<(), libafl::Error> {
+    fn post_exec(&mut self, input_bytes: &[u8]) -> Result<(), libafl::Error> {
         if self.save_dr_cov {
             self.drcov.cnt += 1;
             if self.drcov.max_cnt > 0 && self.drcov.cnt < self.drcov.max_cnt {
@@ -146,6 +140,7 @@ impl FridaRuntime for CoverageRuntime {
 
 impl CoverageRuntime {
     /// Create a new coverage runtime
+    #[allow(clippy::large_stack_arrays)]
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -201,11 +196,11 @@ impl CoverageRuntime {
     /// every time we need a copy that is within a direct branch of the start of the transformed basic
     /// block.
     #[cfg(target_arch = "aarch64")]
-    #[allow(clippy::cast_possible_wrap)]
+    #[expect(clippy::cast_possible_wrap)]
     pub fn generate_inline_code(&mut self, h64: u64, save_block_cov: bool) -> Box<[u8]> {
         let mut borrow = self.inner.borrow_mut();
-        let prev_loc_ptr = addr_of_mut!(borrow.previous_pc);
-        let map_addr_ptr = addr_of_mut!(borrow.map);
+        let prev_loc_ptr = &raw mut borrow.previous_pc;
+        let map_addr_ptr = &raw mut borrow.map;
         let bbs_map_addr_ptr = addr_of_mut!(self.drcov.inner_bbs.borrow_mut().map);
         let mut ops = dynasmrt::VecAssembler::<dynasmrt::aarch64::Aarch64Relocation>::new(0);
         if save_block_cov {
@@ -309,17 +304,16 @@ impl CoverageRuntime {
                 // Skip the data
                 ;   b >end
 
-                ;map_addr:
-                ;.qword map_addr_ptr as i64
-                ;previous_loc:
-                ;.qword prev_loc_ptr as i64
-                ;loc:
-                ;.qword h64 as i64
-                ;loc_shr:
-                ;.qword (h64 >> 1) as i64
-                ;end:
-            );
-        }
+            ;map_addr:
+            ;.i64 map_addr_ptr as i64
+            ;previous_loc:
+            ;.i64 prev_loc_ptr as i64
+            ;loc:
+            ;.i64 h64 as i64
+            ;loc_shr:
+            ;.i64 (h64 >> 1) as i64
+            ;end:
+        );
         let ops_vec = ops.finalize().unwrap();
         ops_vec[..ops_vec.len()].to_vec().into_boxed_slice()
     }
@@ -328,8 +322,8 @@ impl CoverageRuntime {
     #[cfg(target_arch = "x86_64")]
     pub fn generate_inline_code(&mut self, h64: u64, save_block_cov: bool) -> Box<[u8]> {
         let mut borrow = self.inner.borrow_mut();
-        let prev_loc_ptr = addr_of_mut!(borrow.previous_pc);
-        let map_addr_ptr = addr_of_mut!(borrow.map);
+        let prev_loc_ptr = &raw mut borrow.previous_pc;
+        let map_addr_ptr = &raw mut borrow.map;
         let bbs_map_addr_ptr = addr_of_mut!(self.drcov.inner_bbs.borrow_mut().map);
         let mut ops = dynasmrt::VecAssembler::<dynasmrt::x64::X64Relocation>::new(0);
         if save_block_cov {
@@ -455,7 +449,7 @@ impl CoverageRuntime {
         //
         // Since we also need to spill some registers in order to update our
         // coverage map, in the event of a long branch, we can simply re-use
-        // these spilt registers. This, however, means we need to retard the
+        // these spilt registers. This, however, means we need to reset the
         // code writer so that we can overwrite the so-called "restoration
         // prologue".
         #[cfg(target_arch = "aarch64")]

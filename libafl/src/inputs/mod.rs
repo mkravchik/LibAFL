@@ -3,6 +3,9 @@
 pub mod bytes;
 pub use bytes::BytesInput;
 
+pub mod value;
+pub use value::ValueInput;
+
 pub mod encoded;
 pub use encoded::*;
 
@@ -28,16 +31,27 @@ use alloc::{
     string::{String, ToString},
     vec::{Drain, Splice, Vec},
 };
-use core::{clone::Clone, fmt::Debug, marker::PhantomData, ops::RangeBounds};
+use core::{
+    clone::Clone,
+    fmt::Debug,
+    marker::PhantomData,
+    ops::{DerefMut, RangeBounds},
+};
 #[cfg(feature = "std")]
 use std::{fs::File, hash::Hash, io::Read, path::Path};
 
 #[cfg(feature = "std")]
 use libafl_bolts::fs::write_file_atomic;
-use libafl_bolts::{ownedref::OwnedSlice, Error, HasLen};
+use libafl_bolts::{
+    ownedref::{OwnedMutSlice, OwnedSlice},
+    subrange::{SubRangeMutSlice, SubRangeSlice},
+    Error, HasLen,
+};
 #[cfg(feature = "nautilus")]
 pub use nautilus::*;
 use serde::{Deserialize, Serialize};
+
+use crate::corpus::CorpusId;
 
 /// An input for the target
 #[cfg(not(feature = "std"))]
@@ -53,10 +67,7 @@ pub trait Input: Clone + Serialize + serde::de::DeserializeOwned + Debug {
     }
 
     /// Generate a name for this input
-    fn generate_name(&self, idx: usize) -> String;
-
-    /// An hook executed if the input is stored as `Testcase`
-    fn wrapped_as_testcase(&mut self) {}
+    fn generate_name(&self, id: Option<CorpusId>) -> String;
 }
 
 /// An input for the target
@@ -82,18 +93,15 @@ pub trait Input: Clone + Serialize + serde::de::DeserializeOwned + Debug {
     }
 
     /// Generate a name for this input, the user is responsible for making each name of testcase unique.
-    fn generate_name(&self, idx: usize) -> String;
-
-    /// An hook executed if the input is stored as `Testcase`
-    fn wrapped_as_testcase(&mut self) {}
+    fn generate_name(&self, id: Option<CorpusId>) -> String;
 }
 
 /// Convert between two input types with a state
 pub trait InputConverter: Debug {
     /// Source type
-    type From: Input;
+    type From;
     /// Destination type
-    type To: Input;
+    type To;
 
     /// Convert the src type to the dest
     fn convert(&mut self, input: Self::From) -> Result<Self::To, Error>;
@@ -111,7 +119,7 @@ macro_rules! none_input_converter {
 #[derive(Copy, Clone, Serialize, Deserialize, Debug, Hash)]
 pub struct NopInput {}
 impl Input for NopInput {
-    fn generate_name(&self, _idx: usize) -> String {
+    fn generate_name(&self, _id: Option<CorpusId>) -> String {
         "nop-input".to_string()
     }
 }
@@ -121,7 +129,14 @@ impl HasTargetBytes for NopInput {
     }
 }
 
+impl HasLen for NopInput {
+    fn len(&self) -> usize {
+        0
+    }
+}
+
 // TODO change this to fn target_bytes(&self, buffer: &mut Vec<u8>) -> &[u8];
+/// Has a byte representation intended for the target.
 /// Can be represented with a vector of bytes.
 /// This representation is not necessarily deserializable.
 /// Instead, it can be used as bytes input for a target
@@ -130,7 +145,7 @@ pub trait HasTargetBytes {
     fn target_bytes(&self) -> OwnedSlice<u8>;
 }
 
-/// Contains mutateable and resizable bytes
+/// Contains mutable and resizable bytes
 pub trait HasMutatorBytes: HasLen {
     /// The bytes
     fn bytes(&self) -> &[u8];
@@ -140,22 +155,38 @@ pub trait HasMutatorBytes: HasLen {
 
     /// Resize the mutator bytes to a given new size.
     /// Use `value` to fill new slots in case the buffer grows.
-    /// See [`alloc::vec::Vec::splice`].
+    /// See [`Vec::splice`].
     fn resize(&mut self, new_len: usize, value: u8);
 
     /// Extends the given buffer with an iterator. See [`alloc::vec::Vec::extend`]
     fn extend<'a, I: IntoIterator<Item = &'a u8>>(&mut self, iter: I);
 
-    /// Splices the given target bytes according to [`alloc::vec::Vec::splice`]'s rules
+    /// Splices the given target bytes according to [`Vec::splice`]'s rules
     fn splice<R, I>(&mut self, range: R, replace_with: I) -> Splice<'_, I::IntoIter>
     where
         R: RangeBounds<usize>,
         I: IntoIterator<Item = u8>;
 
-    /// Drains the given target bytes according to [`alloc::vec::Vec::drain`]'s rules
+    /// Drains the given target bytes according to [`Vec::drain`]'s rules
     fn drain<R>(&mut self, range: R) -> Drain<'_, u8>
     where
         R: RangeBounds<usize>;
+
+    /// Creates a [`SubRangeSlice`] from this input, that can be used to slice a byte array.
+    fn sub_bytes<R>(&self, range: R) -> SubRangeSlice<u8>
+    where
+        R: RangeBounds<usize>,
+    {
+        SubRangeSlice::new(OwnedSlice::from(self.bytes()), range)
+    }
+
+    /// Creates a [`SubRangeMutSlice`] from this input, that can be used to slice a byte array.
+    fn sub_bytes_mut<R>(&mut self, range: R) -> SubRangeMutSlice<u8>
+    where
+        R: RangeBounds<usize>,
+    {
+        SubRangeMutSlice::new(OwnedMutSlice::from(self.bytes_mut()), range)
+    }
 
     /// Creates a [`BytesSubInput`] from this input, that can be used for local mutations.
     fn sub_input<R>(&mut self, range: R) -> BytesSubInput<Self>
@@ -166,37 +197,21 @@ pub trait HasMutatorBytes: HasLen {
     }
 }
 
-/// A wrapper type that allows us to use mutators for Mutators for `&mut `[`Vec`].
-#[derive(Debug)]
-pub struct MutVecInput<'a>(&'a mut Vec<u8>);
-
-impl<'a> From<&'a mut Vec<u8>> for MutVecInput<'a> {
-    fn from(value: &'a mut Vec<u8>) -> Self {
-        Self(value)
-    }
-}
-
-impl<'a> HasLen for MutVecInput<'a> {
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-}
-
-impl<'a> HasMutatorBytes for MutVecInput<'a> {
+impl HasMutatorBytes for Vec<u8> {
     fn bytes(&self) -> &[u8] {
-        self.0
+        self.as_ref()
     }
 
     fn bytes_mut(&mut self) -> &mut [u8] {
-        self.0
+        self.as_mut()
     }
 
     fn resize(&mut self, new_len: usize, value: u8) {
-        self.0.resize(new_len, value);
+        <Vec<u8>>::resize(self, new_len, value);
     }
 
-    fn extend<'b, I: IntoIterator<Item = &'b u8>>(&mut self, iter: I) {
-        self.0.extend(iter);
+    fn extend<'a, I: IntoIterator<Item = &'a u8>>(&mut self, iter: I) {
+        <Vec<u8> as Extend<I::Item>>::extend(self, iter);
     }
 
     fn splice<R, I>(&mut self, range: R, replace_with: I) -> Splice<'_, I::IntoIter>
@@ -204,14 +219,51 @@ impl<'a> HasMutatorBytes for MutVecInput<'a> {
         R: RangeBounds<usize>,
         I: IntoIterator<Item = u8>,
     {
-        self.0.splice::<R, I>(range, replace_with)
+        <Vec<u8>>::splice(self, range, replace_with)
     }
 
     fn drain<R>(&mut self, range: R) -> Drain<'_, u8>
     where
         R: RangeBounds<usize>,
     {
-        self.0.drain(range)
+        <Vec<u8>>::drain(self, range)
+    }
+}
+
+/// A wrapper type that allows us to use mutators for Mutators for `&mut `[`Vec`].
+#[deprecated(since = "0.15.0", note = "Use &mut Vec<u8> directly")]
+pub type MutVecInput<'a> = &'a mut Vec<u8>;
+
+impl HasMutatorBytes for &mut Vec<u8> {
+    fn bytes(&self) -> &[u8] {
+        self
+    }
+
+    fn bytes_mut(&mut self) -> &mut [u8] {
+        self
+    }
+
+    fn resize(&mut self, new_len: usize, value: u8) {
+        self.deref_mut().resize(new_len, value);
+    }
+
+    fn extend<'b, I: IntoIterator<Item = &'b u8>>(&mut self, iter: I) {
+        <Vec<u8> as Extend<I::Item>>::extend(self, iter);
+    }
+
+    fn splice<R, I>(&mut self, range: R, replace_with: I) -> Splice<'_, I::IntoIter>
+    where
+        R: RangeBounds<usize>,
+        I: IntoIterator<Item = u8>,
+    {
+        self.deref_mut().splice::<R, I>(range, replace_with)
+    }
+
+    fn drain<R>(&mut self, range: R) -> Drain<'_, u8>
+    where
+        R: RangeBounds<usize>,
+    {
+        self.deref_mut().drain(range)
     }
 }
 
@@ -290,5 +342,44 @@ where
 
     fn convert(&mut self, input: Self::From) -> Result<Self::To, Error> {
         (self.convert_cb)(input)
+    }
+}
+
+/// A converter that converts from `input` to target bytes
+pub trait TargetBytesConverter {
+    /// The input
+    type Input;
+
+    /// Create target bytes
+    fn to_target_bytes<'a>(&mut self, input: &'a Self::Input) -> OwnedSlice<'a, u8>;
+}
+
+/// Simply gets the target bytes out from a [`HasTargetBytes`] type.
+#[derive(Debug)]
+pub struct NopTargetBytesConverter<I> {
+    phantom: PhantomData<I>,
+}
+
+impl<I> NopTargetBytesConverter<I> {
+    /// Create a new [`NopTargetBytesConverter`]
+    #[must_use]
+    pub fn new() -> NopTargetBytesConverter<I> {
+        Self {
+            phantom: PhantomData,
+        }
+    }
+}
+
+impl<I> Default for NopTargetBytesConverter<I> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<I: HasTargetBytes> TargetBytesConverter for NopTargetBytesConverter<I> {
+    type Input = I;
+
+    fn to_target_bytes<'a>(&mut self, input: &'a Self::Input) -> OwnedSlice<'a, u8> {
+        input.target_bytes()
     }
 }

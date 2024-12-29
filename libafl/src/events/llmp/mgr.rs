@@ -1,5 +1,5 @@
-/// An [`EventManager`] that forwards all events to other attached fuzzers on shared maps or via tcp,
-/// using low-level message passing, [`llmp`].
+//! An [`crate::events::EventManager`] that forwards all events to other attached fuzzers on shared maps or via tcp,
+//! using low-level message passing, [`libafl_bolts::llmp`].
 
 #[cfg(feature = "std")]
 use alloc::string::ToString;
@@ -15,7 +15,7 @@ use libafl_bolts::{
 };
 use libafl_bolts::{
     current_time,
-    llmp::{LlmpClient, LlmpClientDescription},
+    llmp::{LlmpClient, LlmpClientDescription, LLMP_FLAG_FROM_MM},
     shmem::{NopShMemProvider, ShMemProvider},
     tuples::Handle,
     ClientId,
@@ -25,12 +25,12 @@ use libafl_bolts::{
     llmp::{recv_tcp_msg, send_tcp_msg, TcpRequest, TcpResponse},
     IP_LOCALHOST,
 };
-use log::debug;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "llmp_compression")]
 use crate::events::llmp::COMPRESS_THRESHOLD;
 use crate::{
+    corpus::Corpus,
     events::{
         llmp::{LLMP_TAG_EVENT_TO_BOTH, _LLMP_TAG_EVENT_TO_BROKER},
         AdaptiveSerializer, CustomBufEventResult, CustomBufHandlerFn, Event, EventConfig,
@@ -41,7 +41,7 @@ use crate::{
     fuzzer::{Evaluator, EvaluatorObservers, ExecutionProcessor},
     inputs::{NopInput, UsesInput},
     observers::{ObserversTuple, TimeObserver},
-    state::{HasExecutions, HasLastReportTime, NopState, State, UsesState},
+    state::{HasCorpus, HasExecutions, HasImported, HasLastReportTime, NopState, State, UsesState},
     Error, HasMetadata,
 };
 
@@ -168,10 +168,8 @@ impl<EMH> LlmpEventManagerBuilder<EMH> {
         })
     }
 
-    /// Create an LLMP event manager on a port
-    ///
-    /// If the port is not yet bound, it will act as a broker; otherwise, it
-    /// will act as a client.
+    /// Create an LLMP event manager on a port.
+    /// It expects a broker to exist on this port.
     #[cfg(feature = "std")]
     pub fn build_on_port<S, SP>(
         self,
@@ -367,10 +365,10 @@ where
         let msg = TcpRequest::ClientQuit { client_id };
         // Send this mesasge off and we are leaving.
         match send_tcp_msg(&mut stream, &msg) {
-            Ok(_) => (),
+            Ok(()) => (),
             Err(e) => log::error!("Failed to send tcp message {:#?}", e),
         }
-        debug!("Asking he broker to be disconnected");
+        log::debug!("Asking he broker to be disconnected");
         Ok(())
     }
 
@@ -390,11 +388,11 @@ where
 impl<EMH, S, SP> LlmpEventManager<EMH, S, SP>
 where
     EMH: EventManagerHooksTuple<S>,
-    S: State + HasExecutions + HasMetadata,
+    S: State + HasExecutions + HasMetadata + HasImported + HasCorpus,
+    S::Corpus: Corpus<Input = S::Input>,
     SP: ShMemProvider,
 {
     // Handle arriving events in the client
-    #[allow(clippy::unused_self)]
     fn handle_in_client<E, Z>(
         &mut self,
         fuzzer: &mut Z,
@@ -404,14 +402,17 @@ where
         event: Event<S::Input>,
     ) -> Result<(), Error>
     where
-        E: Executor<Self, Z> + HasObservers<State = S>,
+        E: Executor<Self, Z, State = S> + HasObservers,
+        E::Observers: ObserversTuple<S::Input, S> + Serialize,
         for<'a> E::Observers: Deserialize<'a>,
-        Z: ExecutionProcessor<E::Observers, State = S>
-            + EvaluatorObservers<E::Observers>
-            + Evaluator<E, Self>,
+        Z: ExecutionProcessor<Self, <S::Corpus as Corpus>::Input, E::Observers, S>
+            + EvaluatorObservers<E, Self, <S::Corpus as Corpus>::Input, S>
+            + Evaluator<E, Self, <S::Corpus as Corpus>::Input, S>,
     {
+        if !self.hooks.pre_exec_all(state, client_id, &event)? {
+            return Ok(());
+        }
         let evt_name = event.name_detailed();
-
         match event {
             Event::NewTestcase {
                 input,
@@ -423,11 +424,11 @@ where
                 ..
             } => {
                 #[cfg(feature = "std")]
-                debug!("[{}] Received new Testcase {evt_name} from {client_id:?} ({client_config:?}, forward {forward_id:?})", std::process::id());
+                log::debug!("[{}] Received new Testcase {evt_name} from {client_id:?} ({client_config:?}, forward {forward_id:?})", std::process::id());
 
                 if self.always_interesting {
                     let item = fuzzer.add_input(state, executor, self, input)?;
-                    debug!("Added received Testcase as item #{item}");
+                    log::debug!("Added received Testcase as item #{item}");
                 } else {
                     let res = if client_config.match_with(&self.configuration)
                         && observers_buf.is_some()
@@ -442,22 +443,20 @@ where
                         {
                             state.scalability_monitor_mut().testcase_with_observers += 1;
                         }
-                        fuzzer.execute_and_process(
-                            state, self, input, &observers, &exit_kind, false,
-                        )?
+                        fuzzer
+                            .evaluate_execution(state, self, input, &observers, &exit_kind, false)?
                     } else {
                         #[cfg(feature = "scalability_introspection")]
                         {
                             state.scalability_monitor_mut().testcase_without_observers += 1;
                         }
-                        fuzzer.evaluate_input_with_observers::<E, Self>(
-                            state, executor, self, input, false,
-                        )?
+                        fuzzer.evaluate_input_with_observers(state, executor, self, input, false)?
                     };
                     if let Some(item) = res.1 {
-                        debug!("Added received Testcase {evt_name} as item #{item}");
+                        *state.imported_mut() += 1;
+                        log::debug!("Added received Testcase {evt_name} as item #{item}");
                     } else {
-                        debug!("Testcase {evt_name} was discarded");
+                        log::debug!("Testcase {evt_name} was discarded");
                     }
                 }
             }
@@ -467,6 +466,9 @@ where
                         break;
                     }
                 }
+            }
+            Event::Stop => {
+                state.request_stop();
             }
             _ => {
                 return Err(Error::unknown(format!(
@@ -550,7 +552,7 @@ where
 
     fn serialize_observers<OT>(&mut self, observers: &OT) -> Result<Option<Vec<u8>>, Error>
     where
-        OT: ObserversTuple<Self::State> + Serialize,
+        OT: ObserversTuple<Self::Input, Self::State> + Serialize,
     {
         const SERIALIZE_TIME_FACTOR: u32 = 2;
         const SERIALIZE_PERCENTAGE_THRESHOLD: usize = 80;
@@ -582,13 +584,15 @@ where
 impl<E, EMH, S, SP, Z> EventProcessor<E, Z> for LlmpEventManager<EMH, S, SP>
 where
     EMH: EventManagerHooksTuple<S>,
-    S: State + HasExecutions + HasMetadata,
+    S: State + HasExecutions + HasMetadata + HasImported + HasCorpus,
+    S::Corpus: Corpus<Input = S::Input>,
     SP: ShMemProvider,
-    E: HasObservers<State = S> + Executor<Self, Z>,
+    E: HasObservers + Executor<Self, Z, State = S>,
+    E::Observers: ObserversTuple<S::Input, S> + Serialize,
     for<'a> E::Observers: Deserialize<'a>,
-    Z: ExecutionProcessor<E::Observers, State = S>
-        + EvaluatorObservers<E::Observers>
-        + Evaluator<E, Self>,
+    Z: ExecutionProcessor<Self, <S::Corpus as Corpus>::Input, E::Observers, S>
+        + EvaluatorObservers<E, Self, <S::Corpus as Corpus>::Input, S>
+        + Evaluator<E, Self, <S::Corpus as Corpus>::Input, S>,
 {
     fn process(
         &mut self,
@@ -599,7 +603,7 @@ where
         // TODO: Get around local event copy by moving handle_in_client
         let self_id = self.llmp.sender().id();
         let mut count = 0;
-        while let Some((client_id, tag, _flags, msg)) = self.llmp.recv_buf_with_flags()? {
+        while let Some((client_id, tag, flags, msg)) = self.llmp.recv_buf_with_flags()? {
             assert!(
                 tag != _LLMP_TAG_EVENT_TO_BROKER,
                 "EVENT_TO_BROKER parcel should not have arrived in the client!"
@@ -613,31 +617,44 @@ where
             #[cfg(feature = "llmp_compression")]
             let compressed;
             #[cfg(feature = "llmp_compression")]
-            let event_bytes = if _flags & LLMP_FLAG_COMPRESSED == LLMP_FLAG_COMPRESSED {
+            let event_bytes = if flags & LLMP_FLAG_COMPRESSED == LLMP_FLAG_COMPRESSED {
                 compressed = self.compressor.decompress(msg)?;
                 &compressed
             } else {
                 msg
             };
             let event: Event<S::Input> = postcard::from_bytes(event_bytes)?;
-            debug!("Received event in normal llmp {}", event.name_detailed());
+            log::debug!("Received event in normal llmp {}", event.name_detailed());
+
+            // If the message comes from another machine, do not
+            // consider other events than new testcase.
+            if !event.is_new_testcase() && (flags & LLMP_FLAG_FROM_MM == LLMP_FLAG_FROM_MM) {
+                continue;
+            }
+
             self.handle_in_client(fuzzer, executor, state, client_id, event)?;
             count += 1;
         }
         Ok(count)
     }
+
+    fn on_shutdown(&mut self) -> Result<(), Error> {
+        self.send_exiting()
+    }
 }
 
 impl<E, EMH, S, SP, Z> EventManager<E, Z> for LlmpEventManager<EMH, S, SP>
 where
-    E: HasObservers<State = S> + Executor<Self, Z>,
+    E: HasObservers + Executor<Self, Z, State = S>,
+    E::Observers: ObserversTuple<S::Input, S> + Serialize,
     for<'a> E::Observers: Deserialize<'a>,
     EMH: EventManagerHooksTuple<S>,
-    S: State + HasExecutions + HasMetadata + HasLastReportTime,
+    S: State + HasExecutions + HasMetadata + HasLastReportTime + HasImported + HasCorpus,
+    S::Corpus: Corpus<Input = S::Input>,
     SP: ShMemProvider,
-    Z: ExecutionProcessor<E::Observers, State = S>
-        + EvaluatorObservers<E::Observers>
-        + Evaluator<E, Self>,
+    Z: ExecutionProcessor<Self, <S::Corpus as Corpus>::Input, E::Observers, S>
+        + EvaluatorObservers<E, Self, <S::Corpus as Corpus>::Input, S>
+        + Evaluator<E, Self, <S::Corpus as Corpus>::Input, S>,
 {
 }
 

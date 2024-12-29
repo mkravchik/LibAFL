@@ -11,19 +11,15 @@ pub mod centralized;
 #[cfg(all(unix, feature = "std"))]
 pub use centralized::*;
 #[cfg(feature = "std")]
-#[allow(clippy::ignored_unit_patterns)]
 pub mod launcher;
-#[allow(clippy::ignored_unit_patterns)]
+
 pub mod llmp;
 pub use llmp::*;
+#[cfg(feature = "tcp_manager")]
+pub mod tcp;
 
 pub mod broker_hooks;
-use alloc::{
-    borrow::Cow,
-    boxed::Box,
-    string::{String, ToString},
-    vec::Vec,
-};
+use alloc::{borrow::Cow, boxed::Box, string::String, vec::Vec};
 use core::{
     fmt,
     hash::{BuildHasher, Hasher},
@@ -36,11 +32,12 @@ pub use broker_hooks::*;
 #[cfg(feature = "std")]
 pub use launcher::*;
 #[cfg(all(unix, feature = "std"))]
-use libafl_bolts::os::unix_signals::{siginfo_t, ucontext_t, Handler, Signal, CTRL_C_EXIT};
+use libafl_bolts::os::unix_signals::{siginfo_t, ucontext_t, Signal, SignalHandler};
+#[cfg(all(unix, feature = "std"))]
+use libafl_bolts::os::CTRL_C_EXIT;
 use libafl_bolts::{
     current_time,
     tuples::{Handle, MatchNameRef},
-    ClientId,
 };
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "std")]
@@ -70,7 +67,8 @@ pub mod multi_machine;
 #[cfg(all(unix, feature = "std"))]
 pub static mut EVENTMGR_SIGHANDLER_STATE: ShutdownSignalData = ShutdownSignalData {};
 
-/// A signal handler for catching ctrl-c.
+/// A signal handler for catching `ctrl-c`.
+///
 /// The purpose of this signal handler is solely for calling `exit()` with a specific exit code 100
 /// In this way, the restarting manager can tell that we really want to exit
 #[cfg(all(unix, feature = "std"))]
@@ -79,18 +77,18 @@ pub struct ShutdownSignalData {}
 
 /// Shutdown handler. `SigTerm`, `SigInterrupt`, `SigQuit` call this
 /// We can't handle SIGKILL in the signal handler, this means that you shouldn't kill your fuzzer with `kill -9` because then the shmem segments are never freed
+///
+/// # Safety
+/// This will exit the program
 #[cfg(all(unix, feature = "std"))]
-impl Handler for ShutdownSignalData {
-    fn handle(
+impl SignalHandler for ShutdownSignalData {
+    unsafe fn handle(
         &mut self,
         _signal: Signal,
         _info: &mut siginfo_t,
         _context: Option<&mut ucontext_t>,
     ) {
-        // println!("in handler! {}", std::process::id());
         unsafe {
-            // println!("Exiting from the handler....");
-
             #[cfg(unix)]
             libc::_exit(CTRL_C_EXIT);
 
@@ -118,7 +116,7 @@ use crate::events::multi_machine::NodeId;
 #[cfg(feature = "introspection")]
 use crate::monitors::ClientPerfMonitor;
 use crate::{
-    inputs::UsesInput, observers::TimeObserver, stages::HasCurrentStage, state::UsesState,
+    inputs::UsesInput, observers::TimeObserver, stages::HasCurrentStageId, state::UsesState,
 };
 
 /// The log event severity
@@ -212,7 +210,7 @@ impl EventConfig {
         }
     }
 
-    /// Match if the currenti [`EventConfig`] matches another given config
+    /// Match if the current [`EventConfig`] matches another given config
     #[must_use]
     pub fn match_with(&self, other: &EventConfig) -> bool {
         match self {
@@ -286,10 +284,8 @@ where
         client_config: EventConfig,
         /// The time of generation of the event
         time: Duration,
-        /// The executions of this client
-        executions: u64,
         /// The original sender if, if forwarded
-        forward_id: Option<ClientId>,
+        forward_id: Option<libafl_bolts::ClientId>,
         /// The (multi-machine) node from which the tc is from, if any
         #[cfg(all(unix, feature = "std", feature = "multi_machine"))]
         node_id: Option<NodeId>,
@@ -329,8 +325,6 @@ where
     Objective {
         /// Objective corpus size
         objective_size: usize,
-        /// The total number of executions when this objective is found
-        executions: u64,
         /// The time when this event was created
         time: Duration,
     },
@@ -350,6 +344,8 @@ where
         /// Tag of this buffer
         tag: String,
     },
+    /// Exit gracefully
+    Stop,
     /*/// A custom type
     Custom {
         // TODO: Allow custom events
@@ -361,7 +357,8 @@ impl<I> Event<I>
 where
     I: Input,
 {
-    fn name(&self) -> &str {
+    /// Event's corresponding name
+    pub fn name(&self) -> &str {
         match self {
             Event::NewTestcase { .. } => "Testcase",
             Event::UpdateExecStats { .. } => "Client Heartbeat",
@@ -374,29 +371,37 @@ where
             /*Event::Custom {
                 sender_id: _, /*custom_event} => custom_event.name()*/
             } => "todo",*/
+            Event::Stop => "Stop",
         }
     }
 
-    fn name_detailed(&self) -> String {
+    /// Event's corresponding name with additional info
+    fn name_detailed(&self) -> Cow<'static, str> {
         match self {
             Event::NewTestcase { input, .. } => {
-                format!("Testcase {}", input.generate_name(0))
+                Cow::Owned(format!("Testcase {}", input.generate_name(None)))
             }
-            Event::UpdateExecStats { .. } => "Client Heartbeat".to_string(),
-            Event::UpdateUserStats { .. } => "UserStats".to_string(),
+            Event::UpdateExecStats { .. } => Cow::Borrowed("Client Heartbeat"),
+            Event::UpdateUserStats { .. } => Cow::Borrowed("UserStats"),
             #[cfg(feature = "introspection")]
-            Event::UpdatePerfMonitor { .. } => "PerfMonitor".to_string(),
-            Event::Objective { .. } => "Objective".to_string(),
-            Event::Log { .. } => "Log".to_string(),
-            Event::CustomBuf { .. } => "CustomBuf".to_string(),
+            Event::UpdatePerfMonitor { .. } => Cow::Borrowed("PerfMonitor"),
+            Event::Objective { .. } => Cow::Borrowed("Objective"),
+            Event::Log { .. } => Cow::Borrowed("Log"),
+            Event::CustomBuf { .. } => Cow::Borrowed("CustomBuf"),
+            Event::Stop => Cow::Borrowed("Stop"),
             /*Event::Custom {
                 sender_id: _, /*custom_event} => custom_event.name()*/
             } => "todo",*/
         }
     }
+
+    /// Returns true if self is a new testcase, false otherwise.
+    pub fn is_new_testcase(&self) -> bool {
+        matches!(self, Event::NewTestcase { .. })
+    }
 }
 
-/// [`EventFirer`] fire an event.
+/// [`EventFirer`] fires an event.
 pub trait EventFirer: UsesState {
     /// Send off an [`Event`] to the broker
     ///
@@ -433,7 +438,7 @@ pub trait EventFirer: UsesState {
     /// Serialize all observers for this type and manager
     fn serialize_observers<OT>(&mut self, observers: &OT) -> Result<Option<Vec<u8>>, Error>
     where
-        OT: ObserversTuple<Self::State> + Serialize,
+        OT: ObserversTuple<<Self as UsesInput>::Input, Self::State> + Serialize,
     {
         Ok(Some(postcard::to_allocvec(observers)?))
     }
@@ -541,7 +546,7 @@ where
 /// Restartable trait
 pub trait EventRestarter: UsesState {
     /// For restarting event managers, implement a way to forward state to their next peers.
-    /// You *must* ensure that [`HasCurrentStage::on_restart`] will be invoked in this method, by you
+    /// You *must* ensure that [`HasCurrentStageId::on_restart`] will be invoked in this method, by you
     /// or an internal [`EventRestarter`], before the state is saved for recovery.
     #[inline]
     fn on_restart(&mut self, state: &mut Self::State) -> Result<(), Error> {
@@ -571,6 +576,9 @@ pub trait EventProcessor<E, Z>: UsesState {
         state: &mut Self::State,
         executor: &mut E,
     ) -> Result<usize, Error>;
+
+    /// Shutdown gracefully; typically without saving state.
+    fn on_shutdown(&mut self) -> Result<(), Error>;
 }
 /// The id of this [`EventManager`].
 /// For multi processed [`EventManager`]s,
@@ -659,6 +667,10 @@ where
     ) -> Result<usize, Error> {
         Ok(0)
     }
+
+    fn on_shutdown(&mut self) -> Result<(), Error> {
+        Ok(())
+    }
 }
 
 impl<E, S, Z> EventManager<E, Z> for NopEventManager<S> where
@@ -746,7 +758,7 @@ where
     #[inline]
     fn serialize_observers<OT>(&mut self, observers: &OT) -> Result<Option<Vec<u8>>, Error>
     where
-        OT: ObserversTuple<Self::State> + Serialize,
+        OT: ObserversTuple<<Self as UsesInput>::Input, Self::State> + Serialize,
     {
         self.inner.serialize_observers(observers)
     }
@@ -789,6 +801,10 @@ where
         executor: &mut E,
     ) -> Result<usize, Error> {
         self.inner.process(fuzzer, state, executor)
+    }
+
+    fn on_shutdown(&mut self) -> Result<(), Error> {
+        self.inner.on_shutdown()
     }
 }
 
@@ -878,7 +894,7 @@ pub trait AdaptiveSerializer {
         percentage_threshold: usize,
     ) -> Result<Option<Vec<u8>>, Error>
     where
-        OT: ObserversTuple<S> + Serialize,
+        OT: ObserversTuple<S::Input, S> + Serialize,
         S: UsesInput,
     {
         match self.time_ref() {
@@ -923,8 +939,6 @@ pub trait AdaptiveSerializer {
 #[cfg(test)]
 mod tests {
 
-    use core::ptr::addr_of_mut;
-
     use libafl_bolts::{current_time, tuples::tuple_list, Named};
     use tuple_list::tuple_list_type;
 
@@ -939,8 +953,10 @@ mod tests {
 
     #[test]
     fn test_event_serde() {
+        let map_ptr = &raw const MAP;
         let obv = unsafe {
-            StdMapObserver::from_mut_ptr("test", addr_of_mut!(MAP) as *mut u32, MAP.len())
+            let len = (*map_ptr).len();
+            StdMapObserver::from_mut_ptr("test", &raw mut MAP as *mut u32, len)
         };
         let map = tuple_list!(obv);
         let observers_buf = postcard::to_allocvec(&map).unwrap();
@@ -953,7 +969,6 @@ mod tests {
             corpus_size: 123,
             client_config: EventConfig::AlwaysUnique,
             time: current_time(),
-            executions: 0,
             forward_id: None,
             #[cfg(all(unix, feature = "std", feature = "multi_machine"))]
             node_id: None,

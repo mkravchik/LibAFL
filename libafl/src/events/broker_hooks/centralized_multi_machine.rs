@@ -9,12 +9,11 @@ use std::{
 #[cfg(feature = "llmp_compression")]
 use libafl_bolts::llmp::LLMP_FLAG_COMPRESSED;
 use libafl_bolts::{
-    llmp::{Flags, LlmpBrokerInner, LlmpHook, LlmpMsgHookResult, Tag},
+    llmp::{Flags, LlmpBrokerInner, LlmpHook, LlmpMsgHookResult, Tag, LLMP_FLAG_FROM_MM},
     ownedref::OwnedRef,
     shmem::ShMemProvider,
     ClientId, Error,
 };
-use log::debug;
 use tokio::{
     net::ToSocketAddrs,
     runtime::Runtime,
@@ -102,7 +101,7 @@ where
     A: Clone + Display + ToSocketAddrs + Send + Sync + 'static,
     I: Input + Send + Sync + 'static,
 {
-    /// Should not be created alone. Use [`TcpMultiMachineBuilder`] instead.
+    /// Should not be created alone. Use [`TcpMultiMachineHooksBuilder`] instead.
     pub(crate) fn new(
         shared_state: Arc<RwLock<TcpMultiMachineState<A>>>,
         rt: Arc<Runtime>,
@@ -120,8 +119,13 @@ where
     A: Clone + Display + ToSocketAddrs + Send + Sync + 'static,
     I: Input + Send + Sync + 'static,
 {
-    /// Should not be created alone. Use [`TcpMultiMachineBuilder`] instead.
-    pub(crate) fn new(
+    /// Should not be created alone. Use [`TcpMultiMachineHooksBuilder`] instead.
+    ///
+    /// # Safety
+    /// For [`Self::on_new_message`], this struct assumes that the `msg` parameter
+    /// (or rather, the memory it points to), lives sufficiently long
+    /// for an async background task to process it.
+    pub(crate) unsafe fn new(
         shared_state: Arc<RwLock<TcpMultiMachineState<A>>>,
         rt: Arc<Runtime>,
     ) -> Self {
@@ -172,7 +176,8 @@ where
     ) -> Result<LlmpMsgHookResult, Error> {
         let shared_state = self.shared_state.clone();
 
-        // Here, we suppose msg will never be written again and will always be available.
+        // # Safety
+        // Here, we suppose msg will *never* be written again and will always be available.
         // Thus, it is safe to handle this in a separate thread.
         let msg_lock = unsafe { NullLock::new((msg.as_ptr(), msg.len())) };
         // let flags = msg_flags.clone();
@@ -200,11 +205,13 @@ where
             // TODO: do not copy here
             state_wr_lock.add_past_msg(msg);
 
-            debug!("Sending msg...");
+            log::debug!("Sending msg...");
 
             state_wr_lock
                 .send_interesting_event_to_nodes(&mm_msg)
                 .await?;
+
+            log::debug!("msg sent.");
 
             Ok(())
         });
@@ -239,7 +246,7 @@ where
                 .receive_new_messages_from_nodes(&mut incoming_msgs)
                 .await?;
 
-            debug!("received {} new incoming msg(s)", incoming_msgs.len());
+            log::debug!("received {} new incoming msg(s)", incoming_msgs.len());
 
             let msgs_to_forward: Result<Vec<(Tag, Flags, Vec<u8>)>, Error> = incoming_msgs
                 .into_iter()
@@ -248,20 +255,22 @@ where
                         let msg = msg.into_owned().unwrap().into_vec();
                         #[cfg(feature = "llmp_compression")]
                         match state_wr_lock.compressor().maybe_compress(msg.as_ref()) {
-                            Some(comp_buf) => {
-                                Ok((_LLMP_TAG_TO_MAIN, LLMP_FLAG_COMPRESSED, comp_buf))
-                            }
-                            None => Ok((_LLMP_TAG_TO_MAIN, Flags(0), msg)),
+                            Some(comp_buf) => Ok((
+                                _LLMP_TAG_TO_MAIN,
+                                LLMP_FLAG_COMPRESSED | LLMP_FLAG_FROM_MM,
+                                comp_buf,
+                            )),
+                            None => Ok((_LLMP_TAG_TO_MAIN, LLMP_FLAG_FROM_MM, msg)),
                         }
                         #[cfg(not(feature = "llmp_compression"))]
-                        Ok((_LLMP_TAG_TO_MAIN, Flags(0), msg))
+                        Ok((_LLMP_TAG_TO_MAIN, LLMP_FLAG_FROM_MM, msg))
                     }
                     MultiMachineMsg::Event(evt) => {
                         let evt = evt.into_owned().unwrap();
                         let (inner_flags, buf) =
                             Self::try_compress(&mut state_wr_lock, evt.as_ref())?;
 
-                        Ok((_LLMP_TAG_TO_MAIN, inner_flags, buf))
+                        Ok((_LLMP_TAG_TO_MAIN, inner_flags | LLMP_FLAG_FROM_MM, buf))
                     }
                 })
                 .collect();

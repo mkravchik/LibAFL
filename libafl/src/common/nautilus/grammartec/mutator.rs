@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
-use std::{collections::HashSet, mem};
+use core::{mem, num::NonZero};
 
+use hashbrown::HashSet;
 use libafl_bolts::{rands::Rand, Error};
 
 use crate::common::nautilus::grammartec::{
@@ -26,7 +27,7 @@ impl Mutator {
     }
 
     //Return value indicates if minimization is complete: true: complete, false: not complete
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn minimize_tree<F, R: Rand>(
         &mut self,
         rand: &mut R,
@@ -144,7 +145,10 @@ impl Mutator {
     where
         F: FnMut(&TreeMutation, &Context) -> Result<(), Error>,
     {
-        let n = NodeId::from(rand.below(tree.size()));
+        let Some(tree_size) = NonZero::new(tree.size()) else {
+            return Err(Error::illegal_argument("Empty tree in mut_splice"));
+        };
+        let n = NodeId::from(rand.below(tree_size));
         let old_rule_id = tree.get_rule_id(n);
         if let Some((repl_tree, repl_node)) = cks.get_alternative_to(rand, old_rule_id, ctx) {
             let repl = tree.mutate_replace_from_tree(n, repl_tree, repl_node);
@@ -185,7 +189,10 @@ impl Mutator {
     where
         F: FnMut(&TreeMutation, &Context) -> Result<(), Error>,
     {
-        let n = NodeId::from(rand.below(tree.size()));
+        let Some(tree_size) = NonZero::new(tree.size()) else {
+            return Err(Error::illegal_argument("Empty tree in mut_random"));
+        };
+        let n = NodeId::from(rand.below(tree_size));
         let nterm = tree.get_rule(n, ctx).nonterm();
         if ctx.check_if_nterm_has_multiple_possiblities(&nterm) {
             let len = ctx.get_random_len_for_nt(&nterm);
@@ -310,8 +317,9 @@ mod tests {
         string::{String, ToString},
         vec::Vec,
     };
-    use std::{collections::HashSet, str};
+    use core::str;
 
+    use hashbrown::HashSet;
     use libafl_bolts::rands::StdRand;
 
     use crate::{
@@ -345,7 +353,7 @@ mod tests {
             .iter()
             .map(|x| RuleIdOrCustom::Rule(*x))
             .collect::<Vec<_>>();
-        let mut tree = Tree::from_rule_vec(rules, &ctx);
+        let tree = Tree::from_rule_vec(rules, &ctx);
 
         println!("tree: {tree:?}");
         let mut mutator = Mutator::new(&ctx);
@@ -521,7 +529,6 @@ mod tests {
 
     #[test]
     fn deterministic_splice() {
-        let mut rand = StdRand::new();
         let mut ctx = Context::new();
         let mut rand = StdRand::new();
         let mut cks = ChunkStore::new("/tmp/".to_string());

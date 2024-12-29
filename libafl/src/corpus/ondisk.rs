@@ -1,25 +1,27 @@
-//! The ondisk corpus stores all [`Testcase`]s to disk.
-//! It never keeps any of them in memory.
-//! This is a good solution for solutions that are never reused, and for very memory-constraint environments.
+//! The [`OnDiskCorpus`] stores all [`Testcase`]s to disk.
+//!
+//! It _never_ keeps any of them in memory.
+//! This is a good solution for solutions that are never reused, or for *very* memory-constraint environments.
 //! For any other occasions, consider using [`crate::corpus::CachedOnDiskCorpus`]
-//! which stores a certain number of testcases in memory and removes additional ones in a FIFO manner.
+//! which stores a certain number of [`Testcase`]s in memory and removes additional ones in a FIFO manner.
 
 use alloc::string::String;
-use core::{cell::RefCell, time::Duration};
+use core::{
+    cell::{Ref, RefCell, RefMut},
+    time::Duration,
+};
 use std::path::{Path, PathBuf};
 
 use libafl_bolts::serdeany::SerdeAnyMap;
 use serde::{Deserialize, Serialize};
 
-use super::{CachedOnDiskCorpus, HasTestcase};
 use crate::{
-    corpus::{Corpus, CorpusId, Testcase},
-    inputs::{Input, UsesInput},
+    corpus::{CachedOnDiskCorpus, Corpus, CorpusId, HasTestcase, Testcase},
+    inputs::Input,
     Error,
 };
 
 /// Options for the the format of the on-disk metadata
-#[cfg(feature = "std")]
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub enum OnDiskMetadataFormat {
     /// A binary-encoded postcard
@@ -41,36 +43,24 @@ pub struct OnDiskMetadata<'a> {
     pub metadata: &'a SerdeAnyMap,
     /// The exec time for this [`Testcase`]
     pub exec_time: &'a Option<Duration>,
-    /// The amount of executions for this [`Testcase`]
-    pub executions: &'a u64,
 }
 
 /// A corpus able to store [`Testcase`]s to disk, and load them from disk, when they are being used.
 ///
 /// Metadata is written to a `.<filename>.metadata` file in the same folder by default.
 #[derive(Default, Serialize, Deserialize, Clone, Debug)]
-#[serde(bound = "I: serde::de::DeserializeOwned")]
-pub struct OnDiskCorpus<I>
-where
-    I: Input,
-{
+pub struct OnDiskCorpus<I> {
     /// The root directory backing this corpus
     dir_path: PathBuf,
     /// We wrapp a cached corpus and set its size to 1.
     inner: CachedOnDiskCorpus<I>,
 }
 
-impl<I> UsesInput for OnDiskCorpus<I>
-where
-    I: Input,
-{
-    type Input = I;
-}
-
 impl<I> Corpus for OnDiskCorpus<I>
 where
     I: Input,
 {
+    type Input = I;
     /// Returns the number of all enabled entries
     #[inline]
     fn count(&self) -> usize {
@@ -102,8 +92,8 @@ where
 
     /// Replaces the testcase at the given idx
     #[inline]
-    fn replace(&mut self, idx: CorpusId, testcase: Testcase<I>) -> Result<Testcase<I>, Error> {
-        self.inner.replace(idx, testcase)
+    fn replace(&mut self, id: CorpusId, testcase: Testcase<I>) -> Result<Testcase<I>, Error> {
+        self.inner.replace(id, testcase)
     }
 
     /// Peek the next free corpus id
@@ -114,20 +104,20 @@ where
 
     /// Removes an entry from the corpus, returning it if it was present; considers both enabled and disabled testcases
     #[inline]
-    fn remove(&mut self, idx: CorpusId) -> Result<Testcase<I>, Error> {
-        self.inner.remove(idx)
+    fn remove(&mut self, id: CorpusId) -> Result<Testcase<I>, Error> {
+        self.inner.remove(id)
     }
 
     /// Get by id; will check the disabled corpus if not available in the enabled
     #[inline]
-    fn get(&self, idx: CorpusId) -> Result<&RefCell<Testcase<I>>, Error> {
-        self.inner.get(idx)
+    fn get(&self, id: CorpusId) -> Result<&RefCell<Testcase<I>>, Error> {
+        self.inner.get(id)
     }
 
     /// Get by id; considers both enabled and disabled testcases
     #[inline]
-    fn get_from_all(&self, idx: CorpusId) -> Result<&RefCell<Testcase<I>>, Error> {
-        self.inner.get_from_all(idx)
+    fn get_from_all(&self, id: CorpusId) -> Result<&RefCell<Testcase<I>>, Error> {
+        self.inner.get_from_all(id)
     }
 
     /// Current testcase scheduled
@@ -143,13 +133,13 @@ where
     }
 
     #[inline]
-    fn next(&self, idx: CorpusId) -> Option<CorpusId> {
-        self.inner.next(idx)
+    fn next(&self, id: CorpusId) -> Option<CorpusId> {
+        self.inner.next(id)
     }
 
     #[inline]
-    fn prev(&self, idx: CorpusId) -> Option<CorpusId> {
-        self.inner.prev(idx)
+    fn prev(&self, id: CorpusId) -> Option<CorpusId> {
+        self.inner.prev(id)
     }
 
     #[inline]
@@ -188,25 +178,16 @@ impl<I> HasTestcase for OnDiskCorpus<I>
 where
     I: Input,
 {
-    fn testcase(
-        &self,
-        id: CorpusId,
-    ) -> Result<core::cell::Ref<Testcase<<Self as UsesInput>::Input>>, Error> {
+    fn testcase(&self, id: CorpusId) -> Result<Ref<Testcase<I>>, Error> {
         Ok(self.get(id)?.borrow())
     }
 
-    fn testcase_mut(
-        &self,
-        id: CorpusId,
-    ) -> Result<core::cell::RefMut<Testcase<<Self as UsesInput>::Input>>, Error> {
+    fn testcase_mut(&self, id: CorpusId) -> Result<RefMut<Testcase<I>>, Error> {
         Ok(self.get(id)?.borrow_mut())
     }
 }
 
-impl<I> OnDiskCorpus<I>
-where
-    I: Input,
-{
+impl<I> OnDiskCorpus<I> {
     /// Creates an [`OnDiskCorpus`].
     ///
     /// This corpus stores all testcases to disk.

@@ -107,12 +107,12 @@ fn find_llvm_config() -> Result<String, String> {
 
 fn exec_llvm_config(args: &[&str]) -> String {
     let llvm_config = find_llvm_config().expect("Unexpected error");
-    match Command::new(llvm_config).args(args).output() {
+    match Command::new(&llvm_config).args(args).output() {
         Ok(output) => String::from_utf8(output.stdout)
             .expect("Unexpected llvm-config output")
             .trim()
             .to_string(),
-        Err(e) => panic!("Could not execute llvm-config: {e}"),
+        Err(e) => panic!("Could not execute {llvm_config}: {e}"),
     }
 }
 
@@ -143,7 +143,7 @@ fn find_llvm_version() -> Option<i32> {
     None
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn build_pass(
     bindir_path: &Path,
     out_dir: &Path,
@@ -152,7 +152,7 @@ fn build_pass(
     src_dir: &Path,
     src_file: &str,
     additional_srcfiles: Option<&Vec<&str>>,
-    optional: bool,
+    required: bool,
 ) {
     let dot_offset = src_file.rfind('.').unwrap();
     let src_stub = &src_file[..dot_offset];
@@ -164,7 +164,7 @@ fn build_pass(
     };
 
     println!("cargo:rerun-if-changed=src/{src_file}");
-    let r = if cfg!(unix) {
+    let command_result = if cfg!(unix) {
         let r = Command::new(bindir_path.join("clang++"))
             .arg("-v")
             .arg(format!("--target={}", env::var("HOST").unwrap()))
@@ -198,33 +198,32 @@ fn build_pass(
         None
     };
 
-    match r {
-        Some(r) => match r {
+    match command_result {
+        Some(res) => match res {
             Ok(s) => {
                 if !s.success() {
-                    if optional {
-                        println!("cargo:warning=Skipping src/{src_file} - Exit status: {s}");
+                    if required {
+                        panic!("Failed to compile required compiler pass src/{src_file} - Exit status: {s}");
                     } else {
-                        panic!("Failed to compile {src_file} - Exit status: {s}");
+                        println!("cargo:warning=Skipping non-required compiler pass src/{src_file} - Reason: Exit status {s}. You can ignore this error unless you want this compiler pass.");
                     }
                 }
             }
             Err(err) => {
-                if optional {
-                    println!("cargo:warning=Skipping src/{src_file} - {err}");
+                if required {
+                    panic!("Failed to compile required compiler pass src/{src_file} - Exit status: {err}");
                 } else {
-                    panic!("Failed to compile {src_file} - {err}");
+                    println!("cargo:warning=Skipping non-required compiler pass src/{src_file} - Reason: Exit status {err}. You can ignore this error unless you want this compiler pass.");
                 }
             }
         },
         None => {
-            println!("cargo:warning=Skipping src/{src_file} - Only supported on Windows or *nix.");
+            println!("cargo:warning=Skipping compiler pass src/{src_file} - Only supported on Windows or *nix.");
         }
     }
 }
 
-#[allow(clippy::single_element_loop)]
-#[allow(clippy::too_many_lines)]
+#[expect(clippy::too_many_lines)]
 fn main() {
     let out_dir = env::var_os("OUT_DIR").unwrap();
     let out_dir = Path::new(&out_dir);
@@ -235,16 +234,18 @@ fn main() {
 
     println!("cargo:rerun-if-env-changed=LLVM_CONFIG");
     println!("cargo:rerun-if-env-changed=LLVM_BINDIR");
+    println!("cargo:rerun-if-env-changed=LLVM_AR_PATH");
     println!("cargo:rerun-if-env-changed=LLVM_CXXFLAGS");
     println!("cargo:rerun-if-env-changed=LLVM_LDFLAGS");
     println!("cargo:rerun-if-env-changed=LLVM_VERSION");
-    println!("cargo:rerun-if-env-changed=LIBAFL_EDGES_MAP_SIZE_IN_USE");
+    println!("cargo:rerun-if-env-changed=LIBAFL_EDGES_MAP_DEFAULT_SIZE");
     println!("cargo:rerun-if-env-changed=LIBAFL_ACCOUNTING_MAP_SIZE");
     println!("cargo:rerun-if-env-changed=LIBAFL_DDG_MAP_SIZE");
     println!("cargo:rerun-if-changed=src/common-llvm.h");
     println!("cargo:rerun-if-changed=build.rs");
 
     let llvm_bindir = env::var("LLVM_BINDIR");
+    let llvm_ar_path = env::var("LLVM_AR_PATH");
     let llvm_cxxflags = env::var("LLVM_CXXFLAGS");
     let llvm_ldflags = env::var("LLVM_LDFLAGS");
     let llvm_version = env::var("LLVM_VERSION");
@@ -267,6 +268,8 @@ fn main() {
 pub const CLANG_PATH: &str = \"clang\";
 /// The path to the `clang++` executable
 pub const CLANGXX_PATH: &str = \"clang++\";
+/// The path to the `llvm-ar` executable
+pub const LLVM_AR_PATH: &str = \"llvm-ar\";
 /// The llvm version used to build llvm passes
 pub const LIBAFL_CC_LLVM_VERSION: Option<usize> = None;
     "
@@ -282,16 +285,24 @@ pub const LIBAFL_CC_LLVM_VERSION: Option<usize> = None;
         exec_llvm_config(&["--bindir"])
     };
     let bindir_path = Path::new(&llvm_bindir);
+    let llvm_ar_path = if let Ok(ar_path) = llvm_ar_path {
+        ar_path
+    } else {
+        exec_llvm_config(&["--bindir"])
+    };
 
     let clang;
     let clangcpp;
+    let llvm_ar;
 
     if cfg!(windows) {
         clang = bindir_path.join("clang.exe");
         clangcpp = bindir_path.join("clang++.exe");
+        llvm_ar = Path::new(&llvm_ar_path).join("llvm-ar.exe");
     } else {
         clang = bindir_path.join("clang");
         clangcpp = bindir_path.join("clang++");
+        llvm_ar = Path::new(&llvm_ar_path).join("llvm-ar");
     }
 
     if !clang.exists() {
@@ -303,6 +314,10 @@ pub const LIBAFL_CC_LLVM_VERSION: Option<usize> = None;
         println!("cargo:warning=Failed to find clang++ frontend.");
         return;
     }
+    if !llvm_ar.exists() {
+        println!("cargo:warning=Failed to find llvm-ar archiver.");
+        return;
+    }
 
     let cxxflags = if let Ok(flags) = llvm_cxxflags {
         flags
@@ -311,13 +326,13 @@ pub const LIBAFL_CC_LLVM_VERSION: Option<usize> = None;
     };
     let mut cxxflags: Vec<String> = cxxflags.split_whitespace().map(String::from).collect();
 
-    let edges_map_size_in_use: usize = option_env!("LIBAFL_EDGES_MAP_SIZE_IN_USE")
+    let edge_map_default_size: usize = option_env!("LIBAFL_EDGES_MAP_DEFAULT_SIZE")
         .map_or(Ok(65_536), str::parse)
-        .expect("Could not parse LIBAFL_EDGES_MAP_SIZE_IN_USE");
-    let edges_map_size_max: usize = option_env!("LIBAFL_EDGES_MAP_SIZE_MAX")
+        .expect("Could not parse LIBAFL_EDGES_MAP_DEFAULT_SIZE");
+    let edge_map_allocated_size: usize = option_env!("LIBAFL_EDGES_MAP_ALLOCATED_SIZE")
         .map_or(Ok(2_621_440), str::parse)
-        .expect("Could not parse LIBAFL_EDGES_MAP_SIZE_IN_USE");
-    cxxflags.push(format!("-DEDGES_MAP_SIZE_IN_USE={edges_map_size_in_use}"));
+        .expect("Could not parse LIBAFL_EDGES_MAP_DEFAULT_SIZE");
+    cxxflags.push(format!("-DEDGES_MAP_DEFAULT_SIZE={edge_map_default_size}"));
 
     let acc_map_size: usize = option_env!("LIBAFL_ACCOUNTING_MAP_SIZE")
         .map_or(Ok(65_536), str::parse)
@@ -345,11 +360,13 @@ pub const LIBAFL_CC_LLVM_VERSION: Option<usize> = None;
         pub const CLANG_PATH: &str = {clang:?};
         /// The path to the `clang++` executable
         pub const CLANGXX_PATH: &str = {clangcpp:?};
+        /// The path to the `llvm-ar` executable
+        pub const LLVM_AR_PATH: &str = {llvm_ar:?};
 
         /// The default size of the edges map the fuzzer uses
-        pub const EDGES_MAP_SIZE_IN_USE: usize = {edges_map_size_in_use};
+        pub const EDGES_MAP_DEFAULT_SIZE: usize = {edge_map_default_size};
         /// The real allocated size of the edges map
-        pub const EDGES_MAP_SIZE_MAX: usize = {edges_map_size_max};
+        pub const EDGES_MAP_ALLOCATED_SIZE: usize = {edge_map_allocated_size};
 
         /// The size of the accounting maps
         pub const ACCOUNTING_MAP_SIZE: usize = {acc_map_size};
@@ -416,6 +433,7 @@ pub const LIBAFL_CC_LLVM_VERSION: Option<usize> = None;
         ldflags.push(&sdk_path);
     };
 
+    #[cfg(feature = "ddg-instr")]
     build_pass(
         bindir_path,
         out_dir,
@@ -424,42 +442,104 @@ pub const LIBAFL_CC_LLVM_VERSION: Option<usize> = None;
         src_dir,
         "ddg-instr.cc",
         Some(&vec!["ddg-utils.cc"]),
+        true,
+    );
+
+    #[cfg(feature = "function-logging")]
+    build_pass(
+        bindir_path,
+        out_dir,
+        &cxxflags,
+        &ldflags,
+        src_dir,
+        "function-logging.cc",
+        None,
+        true,
+    );
+
+    #[cfg(feature = "cmplog-routines")]
+    build_pass(
+        bindir_path,
+        out_dir,
+        &cxxflags,
+        &ldflags,
+        src_dir,
+        "cmplog-routines-pass.cc",
+        None,
+        true,
+    );
+
+    #[cfg(feature = "autotokens")]
+    build_pass(
+        bindir_path,
+        out_dir,
+        &cxxflags,
+        &ldflags,
+        src_dir,
+        "autotokens-pass.cc",
+        None,
+        true,
+    );
+
+    #[cfg(feature = "coverage-accounting")]
+    build_pass(
+        bindir_path,
+        out_dir,
+        &cxxflags,
+        &ldflags,
+        src_dir,
+        "coverage-accounting-pass.cc",
+        None,
+        true,
+    );
+
+    #[cfg(feature = "cmplog-instructions")]
+    build_pass(
+        bindir_path,
+        out_dir,
+        &cxxflags,
+        &ldflags,
+        src_dir,
+        "cmplog-instructions-pass.cc",
+        None,
+        true,
+    );
+
+    #[cfg(feature = "ctx")]
+    build_pass(
+        bindir_path,
+        out_dir,
+        &cxxflags,
+        &ldflags,
+        src_dir,
+        "ctx-pass.cc",
+        None,
+        true,
+    );
+
+    #[cfg(feature = "dump-cfg")]
+    build_pass(
+        bindir_path,
+        out_dir,
+        &cxxflags,
+        &ldflags,
+        src_dir,
+        "dump-cfg-pass.cc",
+        None,
         false,
     );
 
-    for pass in &[
-        "function-logging.cc",
-        "cmplog-routines-pass.cc",
-        "autotokens-pass.cc",
-        "coverage-accounting-pass.cc",
-        "cmplog-instructions-pass.cc",
-        "ctx-pass.cc",
-    ] {
-        build_pass(
-            bindir_path,
-            out_dir,
-            &cxxflags,
-            &ldflags,
-            src_dir,
-            pass,
-            None,
-            false,
-        );
-    }
-
-    // Optional pass
-    for pass in &["dump-cfg-pass.cc", "profiling.cc"] {
-        build_pass(
-            bindir_path,
-            out_dir,
-            &cxxflags,
-            &ldflags,
-            src_dir,
-            pass,
-            None,
-            true,
-        );
-    }
+    #[cfg(feature = "profiling")]
+    build_pass(
+        bindir_path,
+        out_dir,
+        &cxxflags,
+        &ldflags,
+        src_dir,
+        "profiling-pass.cc",
+        None,
+        false,
+    );
 
     cc::Build::new()
         .file(src_dir.join("no-link-rt.c"))

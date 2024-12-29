@@ -87,7 +87,6 @@ use std::{
 
 #[cfg(all(debug_assertions, feature = "llmp_debug", feature = "std"))]
 use backtrace::Backtrace;
-use log::debug;
 #[cfg(all(unix, feature = "std"))]
 #[cfg(not(any(target_os = "solaris", target_os = "illumos")))]
 use nix::sys::socket::{self, sockopt::ReusePort};
@@ -98,7 +97,7 @@ use tuple_list::tuple_list;
 #[cfg(all(unix, not(miri)))]
 use crate::os::unix_signals::setup_signal_handler;
 #[cfg(unix)]
-use crate::os::unix_signals::{siginfo_t, ucontext_t, Handler, Signal};
+use crate::os::unix_signals::{siginfo_t, ucontext_t, Signal, SignalHandler};
 #[cfg(all(windows, feature = "std"))]
 use crate::os::windows_exceptions::{setup_ctrl_handler, CtrlHandler};
 #[cfg(feature = "std")]
@@ -144,6 +143,8 @@ pub const LLMP_FLAG_INITIALIZED: Flags = Flags(0x0);
 pub const LLMP_FLAG_COMPRESSED: Flags = Flags(0x1);
 /// From another broker.
 pub const LLMP_FLAG_FROM_B2B: Flags = Flags(0x2);
+/// From another machine (with the `multi_machine` mode)
+pub const LLMP_FLAG_FROM_MM: Flags = Flags(0x4);
 
 /// Timt the broker 2 broker connection waits for incoming data,
 /// before checking for own data to forward again.
@@ -396,14 +397,14 @@ impl Listener {
 
 /// Get sharedmem from a page
 #[inline]
-#[allow(clippy::cast_ptr_alignment)]
+#[expect(clippy::cast_ptr_alignment)]
 unsafe fn shmem2page_mut<SHM: ShMem>(afl_shmem: &mut SHM) -> *mut LlmpPage {
     afl_shmem.as_mut_ptr() as *mut LlmpPage
 }
 
 /// Get sharedmem from a page
 #[inline]
-#[allow(clippy::cast_ptr_alignment)]
+#[expect(clippy::cast_ptr_alignment)]
 unsafe fn shmem2page<SHM: ShMem>(afl_shmem: &SHM) -> *const LlmpPage {
     afl_shmem.as_ptr() as *const LlmpPage
 }
@@ -572,7 +573,7 @@ unsafe fn llmp_next_msg_ptr_checked<SHM: ShMem>(
     let msg_begin_min = (page as *const u8).add(size_of::<LlmpPage>());
     // We still need space for this msg (alloc_size).
     let msg_begin_max = (page as *const u8).add(map_size - alloc_size);
-    let next = _llmp_next_msg_ptr(last_msg);
+    let next = llmp_next_msg_ptr(last_msg);
     let next_ptr = next as *const u8;
     if next_ptr >= msg_begin_min && next_ptr <= msg_begin_max {
         Ok(next)
@@ -590,9 +591,9 @@ unsafe fn llmp_next_msg_ptr_checked<SHM: ShMem>(
 /// # Safety
 /// Will dereference the `last_msg` ptr
 #[inline]
-#[allow(clippy::cast_ptr_alignment)]
-unsafe fn _llmp_next_msg_ptr(last_msg: *const LlmpMsg) -> *mut LlmpMsg {
-    /* DBG("_llmp_next_msg_ptr %p %lu + %lu\n", last_msg, last_msg->buf_len_padded, sizeof(llmp_message)); */
+#[expect(clippy::cast_ptr_alignment)]
+unsafe fn llmp_next_msg_ptr(last_msg: *const LlmpMsg) -> *mut LlmpMsg {
+    /* DBG("llmp_next_msg_ptr %p %lu + %lu\n", last_msg, last_msg->buf_len_padded, sizeof(llmp_message)); */
     (last_msg as *mut u8)
         .add(size_of::<LlmpMsg>())
         .add((*last_msg).buf_len_padded as usize) as *mut LlmpMsg
@@ -664,6 +665,8 @@ impl LlmpMsg {
     /// Gets the buffer from this message as slice, with the correct length.
     #[inline]
     pub fn try_as_slice<SHM: ShMem>(&self, map: &mut LlmpSharedMap<SHM>) -> Result<&[u8], Error> {
+        // # Safety
+        // Safe because we check if we're in a valid shmem region first.
         unsafe {
             if self.in_shmem(map) {
                 Ok(self.as_slice_unsafe())
@@ -858,9 +861,9 @@ impl LlmpPage {
 
     #[inline]
     fn receiver_left(&mut self) {
-        let receivers_joined_count = &mut self.receivers_joined_count;
+        let receivers_left_count = &mut self.receivers_left_count;
         //receivers_joined_count.fetch_add(1, Ordering::Relaxed);
-        receivers_joined_count.store(1, Ordering::Relaxed);
+        receivers_left_count.store(1, Ordering::Relaxed);
     }
 }
 
@@ -1145,7 +1148,7 @@ where
         let last_msg = self.last_msg_sent;
         assert!((*page).size_used + EOP_MSG_SIZE <= (*page).size_total,
                 "PROGRAM ABORT : BUG: EOP does not fit in page! page {page:?}, size_current {:?}, size_total {:?}",
-                ptr::addr_of!((*page).size_used), ptr::addr_of!((*page).size_total));
+                &raw const (*page).size_used, &raw const (*page).size_total);
 
         let ret: *mut LlmpMsg = if last_msg.is_null() {
             (*page).messages.as_mut_ptr()
@@ -1237,14 +1240,14 @@ where
             MessageId((*last_msg).message_id.0 + 1)
         } else {
             /* Oops, wrong usage! */
-            panic!("BUG: The current message never got committed using send! (page->current_msg_id {:?}, last_msg->message_id: {:?})", ptr::addr_of!((*page).current_msg_id), (*last_msg).message_id);
+            panic!("BUG: The current message never got committed using send! (page->current_msg_id {:?}, last_msg->message_id: {:?})", &raw const (*page).current_msg_id, (*last_msg).message_id);
         };
 
         (*ret).buf_len = buf_len as u64;
         (*ret).buf_len_padded = buf_len_padded as u64;
         (*page).size_used += size_of::<LlmpMsg>() + buf_len_padded;
 
-        (*_llmp_next_msg_ptr(ret)).tag = LLMP_TAG_UNSET;
+        (*llmp_next_msg_ptr(ret)).tag = LLMP_TAG_UNSET;
         (*ret).tag = LLMP_TAG_UNINITIALIZED;
 
         self.has_unsent_message = true;
@@ -1288,9 +1291,11 @@ where
         self.last_msg_sent = msg;
         self.has_unsent_message = false;
 
-        debug!(
+        log::debug!(
             "[{} - {:#x}] Send message with id {}",
-            self.id.0, self as *const Self as u64, mid
+            self.id.0,
+            ptr::from_ref::<Self>(self) as u64,
+            mid
         );
 
         Ok(())
@@ -1406,7 +1411,7 @@ where
          * to consume */
         let out = self.alloc_eop()?;
 
-        #[allow(clippy::cast_ptr_alignment)]
+        #[expect(clippy::cast_ptr_alignment)]
         let end_of_page_msg = (*out).buf.as_mut_ptr() as *mut LlmpPayloadSharedMapInfo;
         (*end_of_page_msg).map_size = new_map_shmem.shmem.len();
         (*end_of_page_msg).shm_str = *new_map_shmem.shmem.id().as_array();
@@ -1493,7 +1498,7 @@ where
         (*page).size_used -= old_len_padded as usize;
         (*page).size_used += buf_len_padded;
 
-        (*_llmp_next_msg_ptr(msg)).tag = LLMP_TAG_UNSET;
+        (*llmp_next_msg_ptr(msg)).tag = LLMP_TAG_UNSET;
 
         Ok(())
     }
@@ -1702,10 +1707,10 @@ where
                 return Err(Error::illegal_state("Unexpected message in map (out of map bounds) - buggy client or tampered shared map detected!"));
             }
 
-            debug!(
+            log::debug!(
                 "[{} - {:#x}] Received message with ID {}...",
                 self.id.0,
-                self as *const Self as u64,
+                ptr::from_ref::<Self>(self) as u64,
                 (*msg).message_id.0
             );
 
@@ -1732,7 +1737,7 @@ where
                         size_of::<LlmpPayloadSharedMapInfo>()
                     );
 
-                    #[allow(clippy::cast_ptr_alignment)]
+                    #[expect(clippy::cast_ptr_alignment)]
                     let pageinfo = (*msg).buf.as_mut_ptr() as *mut LlmpPayloadSharedMapInfo;
 
                     /* The pageinfo points to the map we're about to unmap.
@@ -1803,7 +1808,7 @@ where
     }
 
     /// Returns the next message, tag, buf, if available, else None
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     #[inline]
     pub fn recv_buf(&mut self) -> Result<Option<(ClientId, Tag, &[u8])>, Error> {
         if let Some((sender, tag, _flags, buf)) = self.recv_buf_with_flags()? {
@@ -1814,9 +1819,11 @@ where
     }
 
     /// Receive the buffer, also reading the LLMP internal message flags
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     #[inline]
     pub fn recv_buf_with_flags(&mut self) -> Result<Option<(ClientId, Tag, Flags, &[u8])>, Error> {
+        // # Safety
+        // No user-provided potentially unsafe parameters.
         unsafe {
             Ok(match self.recv()? {
                 Some(msg) => Some((
@@ -1831,9 +1838,10 @@ where
     }
 
     /// Receive the buffer, also reading the LLMP internal message flags
-    #[allow(clippy::type_complexity)]
     #[inline]
     pub fn recv_buf_blocking_with_flags(&mut self) -> Result<(ClientId, Tag, Flags, &[u8]), Error> {
+        // # Safety
+        // No user-provided potentially unsafe parameters.
         unsafe {
             let msg = self.recv_blocking()?;
             Ok((
@@ -1848,6 +1856,8 @@ where
     /// Returns the next sender, tag, buf, looping until it becomes available
     #[inline]
     pub fn recv_buf_blocking(&mut self) -> Result<(ClientId, Tag, &[u8]), Error> {
+        // # Safety
+        // No user-provided potentially unsafe parameters.
         unsafe {
             let msg = self.recv_blocking()?;
             Ok((
@@ -1952,6 +1962,8 @@ where
     /// Marks the containing page as `safe_to_unmap`.
     /// This indicates, that the page may safely be unmapped by the sender.
     pub fn mark_safe_to_unmap(&mut self) {
+        // # Safety
+        // No user-provided potentially unsafe parameters.
         unsafe {
             (*self.page_mut()).receiver_joined();
         }
@@ -1976,7 +1988,7 @@ where
     ///
     /// # Safety
     /// This dereferences msg, make sure to pass a proper pointer to it.
-    #[allow(clippy::cast_sign_loss)]
+    #[expect(clippy::cast_sign_loss)]
     pub unsafe fn msg_to_offset(&self, msg: *const LlmpMsg) -> Result<u64, Error> {
         let page = self.page();
         if llmp_msg_in_page(page, msg) {
@@ -2020,7 +2032,7 @@ where
 
     /// Gets this message from this page, at the indicated offset.
     /// Will return [`crate::Error::illegal_argument`] error if the offset is out of bounds.
-    #[allow(clippy::cast_ptr_alignment)]
+    #[expect(clippy::cast_ptr_alignment)]
     pub fn msg_from_offset(&mut self, offset: u64) -> Result<*mut LlmpMsg, Error> {
         let offset = offset as usize;
 
@@ -2090,6 +2102,9 @@ pub trait Broker {
     /// Getter to `exit_after`
     fn exit_after(&self) -> Option<NonZeroUsize>;
 
+    /// Setter for `exit_after`
+    fn set_exit_after(&mut self, n_clients: NonZeroUsize);
+
     /// Getter to `has_clients`
     fn has_clients(&self) -> bool;
 
@@ -2122,6 +2137,9 @@ where
 
     fn exit_after(&self) -> Option<NonZeroUsize> {
         self.inner.exit_cleanly_after
+    }
+    fn set_exit_after(&mut self, n_clients: NonZeroUsize) {
+        self.inner.set_exit_cleanly_after(n_clients);
     }
 
     fn has_clients(&self) -> bool {
@@ -2168,15 +2186,15 @@ pub struct LlmpShutdownSignalHandler {
 }
 
 #[cfg(unix)]
-impl Handler for LlmpShutdownSignalHandler {
-    fn handle(
+impl SignalHandler for LlmpShutdownSignalHandler {
+    unsafe fn handle(
         &mut self,
         _signal: Signal,
         _info: &mut siginfo_t,
         _context: Option<&mut ucontext_t>,
     ) {
         unsafe {
-            ptr::write_volatile(ptr::addr_of_mut!(self.shutting_down), true);
+            ptr::write_volatile(&raw mut self.shutting_down, true);
         }
     }
 
@@ -2187,7 +2205,6 @@ impl Handler for LlmpShutdownSignalHandler {
 
 #[cfg(all(windows, feature = "std"))]
 impl CtrlHandler for LlmpShutdownSignalHandler {
-    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn handle(&mut self, ctrl_type: u32) -> bool {
         log::info!("LLMP: Received shutdown signal, ctrl_type {:?}", ctrl_type);
         unsafe {
@@ -2333,7 +2350,7 @@ impl Brokers {
     #[cfg(any(all(unix, not(miri)), all(windows, feature = "std")))]
     fn setup_handlers() {
         #[cfg(all(unix, not(miri)))]
-        if let Err(e) = unsafe { setup_signal_handler(ptr::addr_of_mut!(LLMP_SIGHANDLER_STATE)) } {
+        if let Err(e) = unsafe { setup_signal_handler(&raw mut LLMP_SIGHANDLER_STATE) } {
             // We can live without a proper ctrl+c signal handler - Ignore.
             log::info!("Failed to setup signal handlers: {e}");
         } else {
@@ -2341,7 +2358,7 @@ impl Brokers {
         }
 
         #[cfg(all(windows, feature = "std"))]
-        if let Err(e) = unsafe { setup_ctrl_handler(ptr::addr_of_mut!(LLMP_SIGHANDLER_STATE)) } {
+        if let Err(e) = unsafe { setup_ctrl_handler(&raw mut LLMP_SIGHANDLER_STATE) } {
             // We can live without a proper ctrl+c signal handler - Ignore.
             log::info!("Failed to setup control handlers: {e}");
         } else {
@@ -2369,47 +2386,47 @@ impl Brokers {
 
         loop {
             self.llmp_brokers.retain_mut(|broker| {
-                if !broker.is_shutting_down() {
-                    if current_milliseconds() > end_time {
-                        broker
-                            .on_timeout()
-                            .expect("An error occurred in broker timeout. Exiting.");
-                        end_time = current_milliseconds() + timeout;
-                    }
-
-                    if broker
-                        .broker_once()
-                        .expect("An error occurred when brokering. Exiting.")
-                    {
-                        end_time = current_milliseconds() + timeout;
-                    }
-
-                    if let Some(exit_after_count) = broker.exit_after() {
-                        // log::trace!(
-                        //     "Clients connected: {} && > {} - {} >= {}",
-                        //     self.has_clients(),
-                        //     self.num_clients_seen,
-                        //     self.listeners.len(),
-                        //     exit_after_count
-                        // );
-                        if !broker.has_clients()
-                            && (broker.num_clients_seen() - broker.nb_listeners())
-                                >= exit_after_count.into()
-                        {
-                            // No more clients connected, and the amount of clients we were waiting for was previously connected.
-                            // exit cleanly.
-                            return false;
-                        }
-                    }
-
-                    true
-                } else {
+                if broker.is_shutting_down() {
                     broker.send_buf(LLMP_TAG_EXITING, &[]).expect(
                         "Error when shutting down broker: Could not send LLMP_TAG_EXITING msg.",
                     );
 
-                    false
+                    return false;
                 }
+
+                if current_milliseconds() > end_time {
+                    broker
+                        .on_timeout()
+                        .expect("An error occurred in broker timeout. Exiting.");
+                    end_time = current_milliseconds() + timeout;
+                }
+
+                if broker
+                    .broker_once()
+                    .expect("An error occurred when brokering. Exiting.")
+                {
+                    end_time = current_milliseconds() + timeout;
+                }
+
+                if let Some(exit_after_count) = broker.exit_after() {
+                    // log::trace!(
+                    //     "Clients connected: {} && > {} - {} >= {}",
+                    //     self.has_clients(),
+                    //     self.num_clients_seen,
+                    //     self.listeners.len(),
+                    //     exit_after_count
+                    // );
+                    if !broker.has_clients()
+                        && (broker.num_clients_seen() - broker.nb_listeners())
+                            >= exit_after_count.into()
+                    {
+                        // No more clients connected, and the amount of clients we were waiting for was previously connected.
+                        // exit cleanly.
+                        return false;
+                    }
+                }
+
+                true
             });
 
             if self.llmp_brokers.is_empty() {
@@ -2634,7 +2651,8 @@ where
     /// Returns `true` if new messages were broker-ed
     /// It is supposed that the message is never unmapped.
     #[inline]
-    #[allow(clippy::cast_ptr_alignment)]
+    #[expect(clippy::cast_ptr_alignment)]
+    #[expect(clippy::too_many_lines)]
     unsafe fn handle_new_msgs(&mut self, client_id: ClientId) -> Result<bool, Error> {
         let mut new_messages = false;
 
@@ -2769,7 +2787,7 @@ where
                         self.inner.forward_msg(msg)?;
                     }
 
-                    debug!("New msg vector: {}", new_msgs.len());
+                    log::debug!("New msg vector: {}", new_msgs.len());
                     for (new_msg_tag, new_msg_flag, new_msg) in new_msgs {
                         self.inner.llmp_out.send_buf_with_flags(
                             new_msg_tag,
@@ -2785,7 +2803,7 @@ where
     #[cfg(any(all(unix, not(miri)), all(windows, feature = "std")))]
     fn setup_handlers() {
         #[cfg(all(unix, not(miri)))]
-        if let Err(e) = unsafe { setup_signal_handler(ptr::addr_of_mut!(LLMP_SIGHANDLER_STATE)) } {
+        if let Err(e) = unsafe { setup_signal_handler(&raw mut LLMP_SIGHANDLER_STATE) } {
             // We can live without a proper ctrl+c signal handler - Ignore.
             log::info!("Failed to setup signal handlers: {e}");
         } else {
@@ -2793,7 +2811,7 @@ where
         }
 
         #[cfg(all(windows, feature = "std"))]
-        if let Err(e) = unsafe { setup_ctrl_handler(ptr::addr_of_mut!(LLMP_SIGHANDLER_STATE)) } {
+        if let Err(e) = unsafe { setup_ctrl_handler(&raw mut LLMP_SIGHANDLER_STATE) } {
             // We can live without a proper ctrl+c signal handler - Ignore.
             log::info!("Failed to setup control handlers: {e}");
         } else {
@@ -3019,15 +3037,18 @@ where
     /// Internal function, returns true when shuttdown is requested by a `SIGINT` signal
     #[inline]
     #[cfg(any(unix, all(windows, feature = "std")))]
-    #[allow(clippy::unused_self)]
+    #[expect(clippy::unused_self)]
     fn is_shutting_down(&self) -> bool {
-        unsafe { ptr::read_volatile(ptr::addr_of!(LLMP_SIGHANDLER_STATE.shutting_down)) }
+        // # Safety
+        // No user-provided potentially unsafe parameters.
+        // Volatile read.
+        unsafe { ptr::read_volatile(&raw const (LLMP_SIGHANDLER_STATE.shutting_down)) }
     }
 
     /// Always returns true on platforms, where no shutdown signal handlers are supported
     #[inline]
     #[cfg(not(any(unix, all(windows, feature = "std"))))]
-    #[allow(clippy::unused_self)]
+    #[expect(clippy::unused_self)]
     fn is_shutting_down(&self) -> bool {
         false
     }
@@ -3063,7 +3084,7 @@ where
     /// Announces a new client on the given shared map.
     /// Called from a background thread, typically.
     /// Upon receiving this message, the broker should map the announced page and start tracking it for new messages.
-    #[allow(dead_code)]
+    #[cfg(feature = "std")]
     fn announce_new_client(
         sender: &mut LlmpSender<SP>,
         shmem_description: &ShMemDescription,
@@ -3073,7 +3094,7 @@ where
                 .alloc_next(size_of::<LlmpPayloadSharedMapInfo>())
                 .expect("Could not allocate a new message in shared map.");
             (*msg).tag = LLMP_TAG_NEW_SHM_CLIENT;
-            #[allow(clippy::cast_ptr_alignment)]
+            #[expect(clippy::cast_ptr_alignment)]
             let pageinfo = (*msg).buf.as_mut_ptr() as *mut LlmpPayloadSharedMapInfo;
             (*pageinfo).shm_str = *shmem_description.id.as_array();
             (*pageinfo).map_size = shmem_description.size;
@@ -3084,12 +3105,14 @@ where
     /// Tell the broker to disconnect this client from it.
     #[cfg(feature = "std")]
     fn announce_client_exit(sender: &mut LlmpSender<SP>, client_id: u32) -> Result<(), Error> {
+        // # Safety
+        // No user-provided potentially unsafe parameters.
         unsafe {
             let msg = sender
                 .alloc_next(size_of::<LlmpClientExitInfo>())
                 .expect("Could not allocate a new message in shared map.");
             (*msg).tag = LLMP_TAG_CLIENT_EXIT;
-            #[allow(clippy::cast_ptr_alignment)]
+            #[expect(clippy::cast_ptr_alignment)]
             let exitinfo = (*msg).buf.as_mut_ptr() as *mut LlmpClientExitInfo;
             (*exitinfo).client_id = client_id;
             sender.send(msg, true)
@@ -3102,7 +3125,7 @@ where
     /// This function returns the [`ShMemDescription`] the client uses to place incoming messages.
     /// The thread exits, when the remote broker disconnects.
     #[cfg(feature = "std")]
-    #[allow(clippy::let_and_return, clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     fn b2b_thread_on(
         mut stream: TcpStream,
         b2b_client_id: ClientId,
@@ -3445,7 +3468,7 @@ where
     /// Reattach to a vacant client map.
     /// It is essential, that the broker (or someone else) kept a pointer to the `out_shmem`
     /// else reattach will get a new, empty page, from the OS, or fail
-    #[allow(clippy::needless_pass_by_value)]
+    #[allow(clippy::needless_pass_by_value)] // no longer necessary on nightly
     pub fn on_existing_shmem(
         shmem_provider: SP,
         _current_out_shmem: SP::ShMem,
@@ -3649,7 +3672,7 @@ where
     }
 
     /// Returns the next message, tag, buf, if available, else None
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     #[inline]
     pub fn recv_buf(&mut self) -> Result<Option<(ClientId, Tag, &[u8])>, Error> {
         self.receiver.recv_buf()
@@ -3662,13 +3685,12 @@ where
     }
 
     /// Receive a `buf` from the broker, including the `flags` used during transmission.
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     pub fn recv_buf_with_flags(&mut self) -> Result<Option<(ClientId, Tag, Flags, &[u8])>, Error> {
         self.receiver.recv_buf_with_flags()
     }
 
     /// Receive a `buf` from the broker, including the `flags` used during transmission.
-    #[allow(clippy::type_complexity)]
     pub fn recv_buf_blocking_with_flags(&mut self) -> Result<(ClientId, Tag, Flags, &[u8]), Error> {
         self.receiver.recv_buf_blocking_with_flags()
     }
@@ -3696,7 +3718,7 @@ where
                                 break stream;
                             }
 
-                            debug!("Connection Refused. Retrying...");
+                            log::debug!("Connection Refused. Retrying...");
 
                             #[cfg(feature = "std")]
                             thread::sleep(Duration::from_millis(50));
@@ -3771,8 +3793,7 @@ mod tests {
     #[test]
     #[serial]
     #[cfg_attr(miri, ignore)]
-    pub fn test_llmp_connection() {
-        #[allow(unused_variables)]
+    fn test_llmp_connection() {
         let shmem_provider = StdShMemProvider::new().unwrap();
         let mut broker = match LlmpConnection::on_port(shmem_provider.clone(), 1337).unwrap() {
             IsClient { client: _ } => panic!("Could not bind to port as broker"),

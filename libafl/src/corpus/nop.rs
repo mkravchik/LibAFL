@@ -5,29 +5,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     corpus::{Corpus, CorpusId, Testcase},
-    inputs::{Input, UsesInput},
     Error,
 };
 
 /// A corpus which does not store any [`Testcase`]s.
 #[derive(Default, Serialize, Deserialize, Clone, Debug)]
-#[serde(bound = "I: serde::de::DeserializeOwned")]
 pub struct NopCorpus<I> {
     empty: Option<CorpusId>,
     phantom: PhantomData<I>,
 }
 
-impl<I> UsesInput for NopCorpus<I>
-where
-    I: Input,
-{
+impl<I> Corpus for NopCorpus<I> {
     type Input = I;
-}
-
-impl<I> Corpus for NopCorpus<I>
-where
-    I: Input,
-{
     /// Returns the number of all enabled entries
     #[inline]
     fn count(&self) -> usize {
@@ -57,27 +46,27 @@ where
         Err(Error::unsupported("Unsupported by NopCorpus"))
     }
 
-    /// Replaces the testcase at the given idx
+    /// Replaces the testcase with the given id
     #[inline]
-    fn replace(&mut self, _idx: CorpusId, _testcase: Testcase<I>) -> Result<Testcase<I>, Error> {
+    fn replace(&mut self, _id: CorpusId, _testcase: Testcase<I>) -> Result<Testcase<I>, Error> {
         Err(Error::unsupported("Unsupported by NopCorpus"))
     }
 
     /// Removes an entry from the corpus, returning it if it was present; considers both enabled and disabled testcases
     #[inline]
-    fn remove(&mut self, _idx: CorpusId) -> Result<Testcase<I>, Error> {
+    fn remove(&mut self, _id: CorpusId) -> Result<Testcase<I>, Error> {
         Err(Error::unsupported("Unsupported by NopCorpus"))
     }
 
     /// Get by id; considers only enabled testcases
     #[inline]
-    fn get(&self, _idx: CorpusId) -> Result<&RefCell<Testcase<I>>, Error> {
+    fn get(&self, _id: CorpusId) -> Result<&RefCell<Testcase<I>>, Error> {
         Err(Error::unsupported("Unsupported by NopCorpus"))
     }
 
     /// Get by id; considers both enabled and disabled testcases
     #[inline]
-    fn get_from_all(&self, _idx: CorpusId) -> Result<&RefCell<Testcase<I>>, Error> {
+    fn get_from_all(&self, _id: CorpusId) -> Result<&RefCell<Testcase<I>>, Error> {
         Err(Error::unsupported("Unsupported by NopCorpus"))
     }
 
@@ -100,12 +89,12 @@ where
     }
 
     #[inline]
-    fn next(&self, _idx: CorpusId) -> Option<CorpusId> {
+    fn next(&self, _id: CorpusId) -> Option<CorpusId> {
         None
     }
 
     #[inline]
-    fn prev(&self, _idx: CorpusId) -> Option<CorpusId> {
+    fn prev(&self, _id: CorpusId) -> Option<CorpusId> {
         None
     }
 
@@ -142,10 +131,7 @@ where
     }
 }
 
-impl<I> NopCorpus<I>
-where
-    I: Input,
-{
+impl<I> NopCorpus<I> {
     /// Creates a new [`NopCorpus`].
     #[must_use]
     pub fn new() -> Self {
