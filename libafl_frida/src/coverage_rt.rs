@@ -1,5 +1,5 @@
 //! Functionality regarding binary-only coverage collection.
-use core::ptr::addr_of_mut;
+
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -7,6 +7,7 @@ use std::{
     marker::PhantomPinned,
     path::PathBuf,
     pin::Pin,
+    ptr::addr_of_mut,
     rc::Rc,
 };
 
@@ -34,7 +35,7 @@ struct CoverageRuntimeInner {
 #[derive(Debug)]
 struct DrCov {
     inner_bbs: Pin<Rc<RefCell<CoverageRuntimeInner>>>,
-    ranges: RangeMap<usize, (u16, String)>,
+    ranges: RangeMap<u64, (u16, String)>,
     coverage_directory: PathBuf,
     basic_blocks: HashMap<u64, DrCovBasicBlock>,
     cnt: usize,
@@ -62,7 +63,7 @@ impl FridaRuntime for CoverageRuntime {
     fn init(
         &mut self,
         _gum: &frida_gum::Gum,
-        ranges: &RangeMap<usize, (u16, String)>,
+        ranges: &RangeMap<u64, (u16, String)>,
         _module_map: &Rc<ModuleMap>,
     ) {
         if self.save_dr_cov {
@@ -74,17 +75,11 @@ impl FridaRuntime for CoverageRuntime {
 
     fn deinit(&mut self, _gum: &frida_gum::Gum) {}
 
-    fn pre_exec<I: libafl::inputs::Input + libafl::inputs::HasTargetBytes>(
-        &mut self,
-        _input: &I,
-    ) -> Result<(), libafl::Error> {
+    fn pre_exec(&mut self, _input_bytes: &[u8]) -> Result<(), libafl::Error> {
         Ok(())
     }
 
-    fn post_exec<I: libafl::inputs::Input + libafl::inputs::HasTargetBytes>(
-        &mut self,
-        input: &I,
-    ) -> Result<(), libafl::Error> {
+    fn post_exec(&mut self, input_bytes: &[u8]) -> Result<(), libafl::Error> {
         if self.save_dr_cov {
             self.drcov.cnt += 1;
             if self.drcov.max_cnt > 0 && self.drcov.cnt < self.drcov.max_cnt {
@@ -106,11 +101,11 @@ impl FridaRuntime for CoverageRuntime {
             }
             let mut coverage_hasher = RandomState::with_seeds(0, 0, 0, 0).build_hasher();
             for bb in &drcov_basic_blocks {
-                coverage_hasher.write_usize(bb.start);
-                coverage_hasher.write_usize(bb.end);
+                coverage_hasher.write_u64(bb.start);
+                coverage_hasher.write_u64(bb.end);
             }
             let coverage_hash = coverage_hasher.finish();
-            let input_name = input.generate_name(0); // The input index is not known at this point, but is not used in the filename
+            let input_name = format!("{:016x}", hash_std(input_bytes));
             let filename = if self.drcov.max_cnt > 0 {
                 self.drcov.coverage_directory.join(format!(
                     "{}_{coverage_hash:016x}_{}-{}.drcov",
@@ -146,6 +141,7 @@ impl FridaRuntime for CoverageRuntime {
 
 impl CoverageRuntime {
     /// Create a new coverage runtime
+    #[allow(clippy::large_stack_arrays)]
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -201,11 +197,11 @@ impl CoverageRuntime {
     /// every time we need a copy that is within a direct branch of the start of the transformed basic
     /// block.
     #[cfg(target_arch = "aarch64")]
-    #[allow(clippy::cast_possible_wrap)]
+    #[expect(clippy::cast_possible_wrap)]
     pub fn generate_inline_code(&mut self, h64: u64, save_block_cov: bool) -> Box<[u8]> {
         let mut borrow = self.inner.borrow_mut();
-        let prev_loc_ptr = addr_of_mut!(borrow.previous_pc);
-        let map_addr_ptr = addr_of_mut!(borrow.map);
+        let prev_loc_ptr = &raw mut borrow.previous_pc;
+        let map_addr_ptr = &raw mut borrow.map;
         let bbs_map_addr_ptr = addr_of_mut!(self.drcov.inner_bbs.borrow_mut().map);
         let mut ops = dynasmrt::VecAssembler::<dynasmrt::aarch64::Aarch64Relocation>::new(0);
         if save_block_cov {
@@ -310,26 +306,26 @@ impl CoverageRuntime {
                 ;   b >end
 
                 ;map_addr:
-                ;.qword map_addr_ptr as i64
+                ;.i64 map_addr_ptr as i64
                 ;previous_loc:
-                ;.qword prev_loc_ptr as i64
+                ;.i64 prev_loc_ptr as i64
                 ;loc:
-                ;.qword h64 as i64
+                ;.i64 h64 as i64
                 ;loc_shr:
-                ;.qword (h64 >> 1) as i64
+                ;.i64 (h64 >> 1) as i64
                 ;end:
             );
+            let ops_vec = ops.finalize().unwrap();
+            ops_vec[..ops_vec.len()].to_vec().into_boxed_slice()
         }
-        let ops_vec = ops.finalize().unwrap();
-        ops_vec[..ops_vec.len()].to_vec().into_boxed_slice()
     }
 
     /// Write inline instrumentation for coverage
     #[cfg(target_arch = "x86_64")]
     pub fn generate_inline_code(&mut self, h64: u64, save_block_cov: bool) -> Box<[u8]> {
         let mut borrow = self.inner.borrow_mut();
-        let prev_loc_ptr = addr_of_mut!(borrow.previous_pc);
-        let map_addr_ptr = addr_of_mut!(borrow.map);
+        let prev_loc_ptr = &raw mut borrow.previous_pc;
+        let map_addr_ptr = &raw mut borrow.map;
         let bbs_map_addr_ptr = addr_of_mut!(self.drcov.inner_bbs.borrow_mut().map);
         let mut ops = dynasmrt::VecAssembler::<dynasmrt::x64::X64Relocation>::new(0);
         if save_block_cov {
@@ -433,7 +429,7 @@ impl CoverageRuntime {
         if self.save_dr_cov {
             let h64 = hash_std(&address.to_le_bytes());
             let map_idx: u64 = h64 & (MAP_SIZE as u64 - 1);
-            let basic_block = DrCovBasicBlock::with_size(address as usize, size);
+            let basic_block = DrCovBasicBlock::with_size(address, size);
             self.drcov.basic_blocks.insert(map_idx, basic_block);
         }
     }
@@ -455,7 +451,7 @@ impl CoverageRuntime {
         //
         // Since we also need to spill some registers in order to update our
         // coverage map, in the event of a long branch, we can simply re-use
-        // these spilt registers. This, however, means we need to retard the
+        // these spilt registers. This, however, means we need to reset the
         // code writer so that we can overwrite the so-called "restoration
         // prologue".
         #[cfg(target_arch = "aarch64")]

@@ -60,6 +60,7 @@ impl StateShMemContent {
 }
 
 /// A [`StateRestorer`] saves and restores bytes to a shared map.
+///
 /// If the state gets larger than the preallocated [`ShMem`] shared map,
 /// it will instead write to disk, and store the file name into the map.
 /// Writing to [`StateRestorer`] multiple times is not allowed.
@@ -194,11 +195,7 @@ where
 
         let shmem_content = self.content_mut();
         unsafe {
-            ptr::copy_nonoverlapping(
-                EXITING_MAGIC as *const u8,
-                shmem_content.buf.as_mut_ptr(),
-                len,
-            );
+            ptr::copy_nonoverlapping(EXITING_MAGIC.as_ptr(), shmem_content.buf.as_mut_ptr(), len);
         }
         shmem_content.buf_len = EXITING_MAGIC.len();
     }
@@ -219,7 +216,7 @@ where
             0,
             "Beginning of the page is not aligned at {ptr:?}!"
         );
-        #[allow(clippy::cast_ptr_alignment)] // Beginning of the page will always be aligned
+        #[expect(clippy::cast_ptr_alignment)] // Beginning of the page will always be aligned
         unsafe {
             &mut *(ptr as *mut StateShMemContent)
         }
@@ -227,7 +224,7 @@ where
 
     /// The content is either the name of the tmpfile, or the serialized bytes directly, if they fit on a single page.
     fn content(&self) -> &StateShMemContent {
-        #[allow(clippy::cast_ptr_alignment)] // Beginning of the page will always be aligned
+        #[expect(clippy::cast_ptr_alignment)] // Beginning of the page will always be aligned
         let ptr = self.shmem.as_slice().as_ptr() as *const StateShMemContent;
         unsafe { &*(ptr) }
     }
@@ -285,22 +282,24 @@ where
 #[cfg(test)]
 mod tests {
 
-    use alloc::{
-        string::{String, ToString},
-        vec::Vec,
-    };
-
+    #[cfg(not(target_os = "haiku"))]
     use serial_test::serial;
-
-    use crate::{
-        shmem::{ShMemProvider, StdShMemProvider},
-        staterestore::StateRestorer,
-    };
 
     #[test]
     #[serial]
     #[cfg_attr(miri, ignore)]
+    #[cfg(not(target_os = "haiku"))]
     fn test_state_restore() {
+        use alloc::{
+            string::{String, ToString},
+            vec::Vec,
+        };
+
+        use crate::{
+            shmem::{ShMemProvider, StdShMemProvider},
+            staterestore::StateRestorer,
+        };
+
         const TESTMAP_SIZE: usize = 1024;
 
         let mut shmem_provider = StdShMemProvider::new().unwrap();

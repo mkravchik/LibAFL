@@ -12,16 +12,17 @@ use libafl_qemu_sys::{
     libafl_save_qemu_snapshot, qemu_cleanup, qemu_main_loop, vm_start, GuestAddr, GuestPhysAddr,
     GuestUsize, GuestVirtAddr,
 };
+use libc::EXIT_SUCCESS;
 use num_traits::Zero;
 
 use crate::{
-    EmulatorMemoryChunk, FastSnapshotPtr, GuestAddrKind, MemAccessInfo, Qemu, QemuExitError,
-    QemuExitReason, QemuSnapshotCheckResult, CPU,
+    FastSnapshotPtr, GuestAddrKind, MemAccessInfo, Qemu, QemuMemoryChunk, QemuSnapshotCheckResult,
+    CPU,
 };
 
 pub(super) extern "C" fn qemu_cleanup_atexit() {
     unsafe {
-        qemu_cleanup();
+        qemu_cleanup(EXIT_SUCCESS);
     }
 }
 
@@ -32,7 +33,7 @@ pub enum DeviceSnapshotFilter {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub struct PhysMemoryChunk {
     addr: GuestPhysAddr,
     size: usize,
@@ -47,7 +48,7 @@ pub struct PhysMemoryIter {
     cpu: CPU,
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub struct HostMemoryIter<'a> {
     addr: GuestPhysAddr, // This address is correct when the iterator enters next, except if the remaining len is 0
     remaining_len: usize,
@@ -95,6 +96,7 @@ impl CPU {
                 page as GuestVirtAddr,
                 attrs.as_mut_ptr(),
             );
+            #[expect(clippy::cast_sign_loss)]
             if paddr == (-1i64 as GuestPhysAddr) {
                 None
             } else {
@@ -139,30 +141,12 @@ impl CPU {
         }
     }
 
-    /// Write a value to a guest address.
+    /// Read a value from a guest address, taking into account the potential MMU / MPU.
     ///
     /// # Safety
-    /// This will write to a translated guest address (using `g2h`).
-    /// It just adds `guest_base` and writes to that location, without checking the bounds.
-    /// This may only be safely used for valid guest addresses!
-    pub unsafe fn write_mem(&self, addr: GuestAddr, buf: &[u8]) {
-        // TODO use gdbstub's target_cpu_memory_rw_debug
-        libafl_qemu_sys::cpu_memory_rw_debug(
-            self.ptr,
-            addr as GuestVirtAddr,
-            buf.as_ptr() as *mut _,
-            buf.len(),
-            true,
-        );
-    }
-
-    /// Read a value from a guest address.
-    ///
-    /// # Safety
-    /// This will read from a translated guest address (using `g2h`).
-    /// It just adds `guest_base` and writes to that location, without checking the bounds.
-    /// This may only be safely used for valid guest addresses!
-    pub unsafe fn read_mem(&self, addr: GuestAddr, buf: &mut [u8]) {
+    /// no check is done on the correctness of the operation.
+    /// if a problem occurred during the operation, there will be no feedback
+    pub unsafe fn read_mem_unchecked(&self, addr: GuestAddr, buf: &mut [u8]) {
         // TODO use gdbstub's target_cpu_memory_rw_debug
         libafl_qemu_sys::cpu_memory_rw_debug(
             self.ptr,
@@ -172,15 +156,38 @@ impl CPU {
             false,
         );
     }
+
+    /// Write a value to a guest address, taking into account the potential MMU / MPU.
+    ///
+    /// # Safety
+    /// no check is done on the correctness of the operation.
+    /// if a problem occurred during the operation, there will be no feedback
+    pub unsafe fn write_mem_unchecked(&self, addr: GuestAddr, buf: &[u8]) {
+        // TODO use gdbstub's target_cpu_memory_rw_debug
+        libafl_qemu_sys::cpu_memory_rw_debug(
+            self.ptr,
+            addr as GuestVirtAddr,
+            buf.as_ptr() as *mut _,
+            buf.len(),
+            true,
+        );
+    }
 }
 
-#[allow(clippy::unused_self)]
+#[expect(clippy::unused_self)]
 impl Qemu {
+    #[must_use]
     pub fn guest_page_size(&self) -> usize {
         4096
     }
 
     /// Write a value to a physical guest address, including ROM areas.
+    ///
+    /// # Safety
+    ///
+    /// No check is done on the correctness of the operation at the moment.
+    /// Nothing bad will happen if the operation is incorrect, but it will be silently skipped.
+    // TODO: use address_space_rw and check for the result MemTxResult
     pub unsafe fn write_phys_mem(&self, paddr: GuestPhysAddr, buf: &[u8]) {
         libafl_qemu_sys::cpu_physical_memory_rw(
             paddr,
@@ -190,7 +197,13 @@ impl Qemu {
         );
     }
 
-    /// Read a value from a physical guest address.
+    /// Read a value from a physical guest address, including ROM areas.
+    ///
+    /// # Safety
+    ///
+    /// No check is done on the correctness of the operation at the moment.
+    /// Nothing bad will happen if the operation is incorrect, but it will be silently skipped.
+    // TODO: use address_space_rw and check for the result MemTxResult
     pub unsafe fn read_phys_mem(&self, paddr: GuestPhysAddr, buf: &mut [u8]) {
         libafl_qemu_sys::cpu_physical_memory_rw(
             paddr,
@@ -200,27 +213,20 @@ impl Qemu {
         );
     }
 
-    /// This function will run the emulator until the next breakpoint / sync exit, or until finish.
-    /// It is a low-level function and simply kicks QEMU.
-    /// # Safety
-    ///
-    /// Should, in general, be safe to call.
-    /// Of course, the emulated target is not contained securely and can corrupt state or interact with the operating system.
-    pub unsafe fn run(&self) -> Result<QemuExitReason, QemuExitError> {
+    #[expect(clippy::trivially_copy_pass_by_ref)]
+    pub(super) unsafe fn run_inner(&self) {
         vm_start();
         qemu_main_loop();
-
-        self.post_run()
     }
 
     pub fn save_snapshot(&self, name: &str, sync: bool) {
         let s = CString::new(name).expect("Invalid snapshot name");
-        unsafe { libafl_save_qemu_snapshot(s.as_ptr() as *const _, sync) };
+        unsafe { libafl_save_qemu_snapshot(s.as_ptr().cast_mut(), sync) };
     }
 
     pub fn load_snapshot(&self, name: &str, sync: bool) {
         let s = CString::new(name).expect("Invalid snapshot name");
-        unsafe { libafl_load_qemu_snapshot(s.as_ptr() as *const _, sync) };
+        unsafe { libafl_load_qemu_snapshot(s.as_ptr().cast_mut(), sync) };
     }
 
     #[must_use]
@@ -252,21 +258,23 @@ impl Qemu {
         }
     }
 
+    #[expect(clippy::missing_safety_doc)]
     pub unsafe fn restore_fast_snapshot(&self, snapshot: FastSnapshotPtr) {
-        libafl_qemu_sys::syx_snapshot_root_restore(snapshot)
+        libafl_qemu_sys::syx_snapshot_root_restore(snapshot);
     }
 
+    #[allow(clippy::missing_safety_doc)]
+    #[must_use]
     pub unsafe fn check_fast_snapshot(
         &self,
         ref_snapshot: FastSnapshotPtr,
     ) -> QemuSnapshotCheckResult {
         let check_result = libafl_qemu_sys::syx_snapshot_check(ref_snapshot);
 
-        QemuSnapshotCheckResult {
-            nb_page_inconsistencies: check_result.nb_inconsistencies,
-        }
+        QemuSnapshotCheckResult::new(check_result.nb_inconsistencies)
     }
 
+    #[must_use]
     pub fn list_devices(&self) -> Vec<String> {
         let mut r = vec![];
         unsafe {
@@ -295,7 +303,8 @@ impl Qemu {
     }
 }
 
-impl EmulatorMemoryChunk {
+impl QemuMemoryChunk {
+    #[must_use]
     pub fn phys_iter(&self, qemu: Qemu) -> PhysMemoryIter {
         PhysMemoryIter {
             addr: self.addr,
@@ -309,7 +318,8 @@ impl EmulatorMemoryChunk {
         }
     }
 
-    #[allow(clippy::map_flatten)]
+    #[expect(clippy::map_flatten)]
+    #[must_use]
     pub fn host_iter(&self, qemu: Qemu) -> Box<dyn Iterator<Item = &[u8]>> {
         Box::new(
             self.phys_iter(qemu)
@@ -325,12 +335,14 @@ impl EmulatorMemoryChunk {
         )
     }
 
+    #[must_use]
     pub fn to_host_segmented_buf(&self, qemu: Qemu) -> SegmentedBuf<&[u8]> {
         self.host_iter(qemu).collect()
     }
 }
 
 impl PhysMemoryChunk {
+    #[must_use]
     pub fn new(addr: GuestPhysAddr, size: usize, qemu: Qemu, cpu: CPU) -> Self {
         Self {
             addr,

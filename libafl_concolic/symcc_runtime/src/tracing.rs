@@ -6,6 +6,7 @@ use libafl::observers::concolic::SymExpr;
 use crate::{RSymExpr, Runtime};
 
 /// Traces the expressions according to the format described in [`libafl::observers::concolic::serialization_format`].
+///
 /// The format can be read from elsewhere to perform processing of the expressions outside of the runtime.
 pub struct TracingRuntime {
     writer: StdShMemMessageFileWriter,
@@ -24,7 +25,7 @@ impl TracingRuntime {
         }
     }
 
-    #[allow(clippy::unnecessary_wraps)]
+    #[expect(clippy::unnecessary_wraps)]
     fn write_message(&mut self, message: SymExpr) -> Option<RSymExpr> {
         Some(self.writer.write_message(message).unwrap())
     }
@@ -34,14 +35,14 @@ impl TracingRuntime {
 /// according to [`concolic::SymExpr`].
 macro_rules! expression_builder {
     ($method_name:ident ( $($param_name:ident : $param_type:ty ),+ ) => $message:ident) => {
-        #[allow(clippy::missing_safety_doc)]
+        // #[expect(clippy::missing_safety_doc)]
         #[no_mangle]
         fn $method_name(&mut self, $( $param_name : $param_type, )+ ) -> Option<RSymExpr> {
             self.write_message(SymExpr::$message { $($param_name,)+ })
         }
     };
     ($method_name:ident () => $message:ident) => {
-        #[allow(clippy::missing_safety_doc)]
+        // #[expect(clippy::missing_safety_doc)]
         #[no_mangle]
         fn $method_name(&mut self) -> Option<RSymExpr> {
             self.write_message(SymExpr::$message)
@@ -62,7 +63,6 @@ macro_rules! binary_expression_builder {
 }
 
 impl Runtime for TracingRuntime {
-    #[allow(clippy::missing_safety_doc)]
     #[no_mangle]
     fn build_integer_from_buffer(
         &mut self,

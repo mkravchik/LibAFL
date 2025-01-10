@@ -7,11 +7,7 @@ use std::{
 
 use ahash::RandomState;
 use frida_gum::ModuleMap;
-use libafl::{
-    inputs::{HasTargetBytes, Input},
-    Error,
-};
-use libafl_bolts::AsSlice;
+use libafl::Error;
 use libafl_targets::drcov::{DrCovBasicBlock, DrCovWriter};
 use rangemap::RangeMap;
 
@@ -23,7 +19,7 @@ pub struct DrCovRuntime {
     /// The basic blocks of this execution
     pub drcov_basic_blocks: Vec<DrCovBasicBlock>,
     /// The memory ranges of this target
-    ranges: RangeMap<usize, (u16, String)>,
+    ranges: RangeMap<u64, (u16, String)>,
     coverage_directory: PathBuf,
     cnt: usize,
     max_cnt: usize,
@@ -35,7 +31,7 @@ impl FridaRuntime for DrCovRuntime {
     fn init(
         &mut self,
         _gum: &frida_gum::Gum,
-        ranges: &RangeMap<usize, (u16, String)>,
+        ranges: &RangeMap<u64, (u16, String)>,
         _module_map: &Rc<ModuleMap>,
     ) {
         self.ranges = ranges.clone();
@@ -46,13 +42,13 @@ impl FridaRuntime for DrCovRuntime {
     fn deinit(&mut self, _gum: &frida_gum::Gum) {}
 
     /// Called before execution, does nothing
-    fn pre_exec<I: Input + HasTargetBytes>(&mut self, _input: &I) -> Result<(), Error> {
+    fn pre_exec(&mut self, _input_bytes: &[u8]) -> Result<(), Error> {
         Ok(())
     }
 
     /// Called after execution, writes the trace to a unique `DrCov` file for this trace
     /// into `./coverage/<input_hash>_<coverage_hash>.drcov`. Empty coverages will be skipped.
-    fn post_exec<I: Input + HasTargetBytes>(&mut self, input: &I) -> Result<(), Error> {
+    fn post_exec(&mut self, input_bytes: &[u8]) -> Result<(), Error> {
         self.cnt += 1;
         if self.max_cnt > 0 && self.cnt < self.max_cnt {
             return Ok(());
@@ -63,13 +59,13 @@ impl FridaRuntime for DrCovRuntime {
         }
 
         let mut input_hasher = RandomState::with_seeds(0, 0, 0, 0).build_hasher();
-        input_hasher.write(input.target_bytes().as_slice());
+        input_hasher.write(input_bytes);
         let input_hash = input_hasher.finish();
 
         let mut coverage_hasher = RandomState::with_seeds(0, 0, 0, 0).build_hasher();
         for bb in &self.drcov_basic_blocks {
-            coverage_hasher.write_usize(bb.start);
-            coverage_hasher.write_usize(bb.end);
+            coverage_hasher.write_u64(bb.start);
+            coverage_hasher.write_u64(bb.end);
         }
         let coverage_hash = coverage_hasher.finish();
 

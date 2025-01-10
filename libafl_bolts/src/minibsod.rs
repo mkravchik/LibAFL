@@ -1,7 +1,7 @@
 //! Implements a mini-bsod generator.
 //! It dumps all important registers and prints a stacktrace.
 
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_vendor = "apple", target_os = "openbsd"))]
 use core::mem::size_of;
 use std::io::{BufWriter, Write};
 #[cfg(any(target_os = "solaris", target_os = "illumos"))]
@@ -29,7 +29,6 @@ use crate::os::unix_signals::{ucontext_t, Signal};
     any(target_os = "linux", target_os = "android"),
     target_arch = "x86_64"
 ))]
-#[allow(clippy::similar_names)]
 pub fn dump_registers<W: Write>(
     writer: &mut BufWriter<W>,
     ucontext: &ucontext_t,
@@ -65,7 +64,6 @@ pub fn dump_registers<W: Write>(
 
 /// Write the content of all important registers
 #[cfg(all(any(target_os = "linux", target_os = "android"), target_arch = "x86"))]
-#[allow(clippy::similar_names)]
 pub fn dump_registers<W: Write>(
     writer: &mut BufWriter<W>,
     ucontext: &ucontext_t,
@@ -144,7 +142,6 @@ pub fn dump_registers<W: Write>(
 
 /// Write the content of all important registers
 #[cfg(all(target_os = "freebsd", target_arch = "aarch64"))]
-#[allow(clippy::similar_names)]
 pub fn dump_registers<W: Write>(
     writer: &mut BufWriter<W>,
     ucontext: &ucontext_t,
@@ -168,7 +165,6 @@ pub fn dump_registers<W: Write>(
 
 /// Write the content of all important registers
 #[cfg(all(target_vendor = "apple", target_arch = "aarch64"))]
-#[allow(clippy::similar_names)]
 pub fn dump_registers<W: Write>(
     writer: &mut BufWriter<W>,
     ucontext: &ucontext_t,
@@ -192,7 +188,7 @@ pub fn dump_registers<W: Write>(
 }
 
 /// Write the content of all important registers
-#[allow(clippy::unnecessary_wraps, clippy::similar_names)]
+#[expect(clippy::unnecessary_wraps, clippy::similar_names)]
 #[cfg(all(target_vendor = "apple", target_arch = "x86_64"))]
 pub fn dump_registers<W: Write>(
     writer: &mut BufWriter<W>,
@@ -228,7 +224,6 @@ pub fn dump_registers<W: Write>(
     any(target_os = "freebsd", target_os = "dragonfly"),
     target_arch = "x86_64"
 ))]
-#[allow(clippy::similar_names)]
 pub fn dump_registers<W: Write>(
     writer: &mut BufWriter<W>,
     ucontext: &ucontext_t,
@@ -258,7 +253,6 @@ pub fn dump_registers<W: Write>(
 
 /// Write the content of all important registers
 #[cfg(all(target_os = "netbsd", target_arch = "x86_64"))]
-#[allow(clippy::similar_names)]
 pub fn dump_registers<W: Write>(
     writer: &mut BufWriter<W>,
     ucontext: &ucontext_t,
@@ -368,7 +362,6 @@ pub fn dump_registers<W: Write>(
 
 /// Write the content of all important registers
 #[cfg(all(target_os = "openbsd", target_arch = "x86_64"))]
-#[allow(clippy::similar_names)]
 pub fn dump_registers<W: Write>(
     writer: &mut BufWriter<W>,
     ucontext: &ucontext_t,
@@ -396,7 +389,6 @@ pub fn dump_registers<W: Write>(
 
 /// Write the content of all important registers
 #[cfg(all(target_os = "openbsd", target_arch = "aarch64"))]
-#[allow(clippy::similar_names)]
 pub fn dump_registers<W: Write>(
     writer: &mut BufWriter<W>,
     ucontext: &ucontext_t,
@@ -419,7 +411,6 @@ pub fn dump_registers<W: Write>(
     any(target_os = "solaris", target_os = "illumos"),
     target_arch = "x86_64"
 ))]
-#[allow(clippy::similar_names)]
 pub fn dump_registers<W: Write>(
     writer: &mut BufWriter<W>,
     ucontext: &ucontext_t,
@@ -454,36 +445,80 @@ pub fn dump_registers<W: Write>(
 }
 
 /// Write the content of all important registers
-#[cfg(windows)]
-#[allow(clippy::similar_names)]
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 pub fn dump_registers<W: Write>(
     writer: &mut BufWriter<W>,
     context: &CONTEXT,
 ) -> Result<(), std::io::Error> {
-    write!(writer, "r8 : {:#016x}, ", context.R8)?;
-    write!(writer, "r9 : {:#016x}, ", context.R9)?;
-    write!(writer, "r10: {:#016x}, ", context.R10)?;
-    writeln!(writer, "r11: {:#016x}, ", context.R11)?;
-    write!(writer, "r12: {:#016x}, ", context.R12)?;
-    write!(writer, "r13: {:#016x}, ", context.R13)?;
-    write!(writer, "r14: {:#016x}, ", context.R14)?;
-    writeln!(writer, "r15: {:#016x}, ", context.R15)?;
-    write!(writer, "rdi: {:#016x}, ", context.Rdi)?;
-    write!(writer, "rsi: {:#016x}, ", context.Rsi)?;
-    write!(writer, "rbp: {:#016x}, ", context.Rbp)?;
-    writeln!(writer, "rbx: {:#016x}, ", context.Rbx)?;
-    write!(writer, "rdx: {:#016x}, ", context.Rdx)?;
-    write!(writer, "rax: {:#016x}, ", context.Rax)?;
-    write!(writer, "rcx: {:#016x}, ", context.Rcx)?;
-    writeln!(writer, "rsp: {:#016x}, ", context.Rsp)?;
-    write!(writer, "rip: {:#016x}, ", context.Rip)?;
-    writeln!(writer, "efl: {:#016x}, ", context.EFlags)?;
+    write!(writer, "r8 : {:#018x}, ", context.R8)?;
+    write!(writer, "r9 : {:#018x}, ", context.R9)?;
+    write!(writer, "r10: {:#018x}, ", context.R10)?;
+    writeln!(writer, "r11: {:#018x}, ", context.R11)?;
+    write!(writer, "r12: {:#018x}, ", context.R12)?;
+    write!(writer, "r13: {:#018x}, ", context.R13)?;
+    write!(writer, "r14: {:#018x}, ", context.R14)?;
+    writeln!(writer, "r15: {:#018x}, ", context.R15)?;
+    write!(writer, "rdi: {:#018x}, ", context.Rdi)?;
+    write!(writer, "rsi: {:#018x}, ", context.Rsi)?;
+    write!(writer, "rbp: {:#018x}, ", context.Rbp)?;
+    writeln!(writer, "rbx: {:#018x}, ", context.Rbx)?;
+    write!(writer, "rdx: {:#018x}, ", context.Rdx)?;
+    write!(writer, "rax: {:#018x}, ", context.Rax)?;
+    write!(writer, "rcx: {:#018x}, ", context.Rcx)?;
+    writeln!(writer, "rsp: {:#018x}, ", context.Rsp)?;
+    write!(writer, "rip: {:#018x}, ", context.Rip)?;
+    writeln!(writer, "efl: {:#018x}", context.EFlags)?;
 
     Ok(())
 }
 
+/// Write the content of all important registers
+#[cfg(all(target_os = "windows", target_arch = "x86"))]
+pub fn dump_registers<W: Write>(
+    writer: &mut BufWriter<W>,
+    context: &CONTEXT,
+) -> Result<(), std::io::Error> {
+    write!(writer, "eax: {:#010x}, ", context.Eax)?;
+    write!(writer, "ebx: {:#010x}, ", context.Ebx)?;
+    write!(writer, "ecx: {:#010x}, ", context.Ecx)?;
+    writeln!(writer, "edx: {:#010x}, ", context.Edx)?;
+    write!(writer, "edi: {:#010x}, ", context.Edi)?;
+    write!(writer, "esi: {:#010x}, ", context.Esi)?;
+    write!(writer, "esp: {:#010x}, ", context.Esp)?;
+    writeln!(writer, "ebp: {:#010x}, ", context.Ebp)?;
+    write!(writer, "eip: {:#010x}, ", context.Eip)?;
+    writeln!(writer, "efl: {:#010x} ", context.EFlags)?;
+    Ok(())
+}
+
+/// Write the content of all important registers
+#[cfg(all(target_os = "windows", target_arch = "aarch64"))]
+pub fn dump_registers<W: Write>(
+    writer: &mut BufWriter<W>,
+    context: &CONTEXT,
+) -> Result<(), std::io::Error> {
+    for reg in 0..29_usize {
+        write!(writer, "x{:02}: 0x{:016x} ", reg, unsafe {
+            context.Anonymous.X[reg]
+        })?;
+        if reg % 4 == 3 || reg == 28_usize {
+            writeln!(writer)?;
+        }
+    }
+    writeln!(writer, "pc : 0x{:016x} ", context.Pc)?;
+    writeln!(writer, "sp : 0x{:016x} ", context.Sp)?;
+    writeln!(writer, "fp : 0x{:016x} ", unsafe {
+        context.Anonymous.Anonymous.Fp
+    })?;
+    writeln!(writer, "lr : 0x{:016x} ", unsafe {
+        context.Anonymous.Anonymous.Lr
+    })?;
+
+    Ok(())
+}
+
+/// Write the content of all important registers
 #[cfg(all(target_os = "haiku", target_arch = "x86_64"))]
-#[allow(clippy::similar_names)]
 pub fn dump_registers<W: Write>(
     writer: &mut BufWriter<W>,
     ucontext: &ucontext_t,
@@ -510,7 +545,7 @@ pub fn dump_registers<W: Write>(
     Ok(())
 }
 
-#[allow(clippy::unnecessary_wraps)]
+#[expect(clippy::unnecessary_wraps)]
 #[cfg(not(any(
     target_vendor = "apple",
     target_os = "linux",
@@ -622,7 +657,6 @@ fn write_crash<W: Write>(
 }
 
 #[cfg(all(target_vendor = "apple", target_arch = "aarch64"))]
-#[allow(clippy::similar_names)]
 fn write_crash<W: Write>(
     writer: &mut BufWriter<W>,
     signal: Signal,
@@ -639,7 +673,6 @@ fn write_crash<W: Write>(
 }
 
 #[cfg(all(target_vendor = "apple", target_arch = "x86_64"))]
-#[allow(clippy::similar_names)]
 fn write_crash<W: Write>(
     writer: &mut BufWriter<W>,
     signal: Signal,
@@ -661,7 +694,6 @@ fn write_crash<W: Write>(
 }
 
 #[cfg(all(target_os = "freebsd", target_arch = "x86_64"))]
-#[allow(clippy::similar_names)]
 fn write_crash<W: Write>(
     writer: &mut BufWriter<W>,
     signal: Signal,
@@ -677,7 +709,6 @@ fn write_crash<W: Write>(
 }
 
 #[cfg(all(target_os = "dragonfly", target_arch = "x86_64"))]
-#[allow(clippy::similar_names)]
 fn write_crash<W: Write>(
     writer: &mut BufWriter<W>,
     signal: Signal,
@@ -693,7 +724,6 @@ fn write_crash<W: Write>(
 }
 
 #[cfg(all(target_os = "openbsd", target_arch = "x86_64"))]
-#[allow(clippy::similar_names)]
 fn write_crash<W: Write>(
     writer: &mut BufWriter<W>,
     signal: Signal,
@@ -709,7 +739,6 @@ fn write_crash<W: Write>(
 }
 
 #[cfg(all(target_os = "openbsd", target_arch = "aarch64"))]
-#[allow(clippy::similar_names)]
 fn write_crash<W: Write>(
     writer: &mut BufWriter<W>,
     signal: Signal,
@@ -835,7 +864,7 @@ fn write_minibsod<W: Write>(writer: &mut BufWriter<W>) -> Result<(), std::io::Er
 }
 
 #[cfg(any(target_os = "freebsd", target_os = "netbsd"))]
-#[allow(clippy::cast_ptr_alignment)]
+#[expect(clippy::cast_ptr_alignment)]
 fn write_minibsod<W: Write>(writer: &mut BufWriter<W>) -> Result<(), std::io::Error> {
     let mut s: usize = 0;
     #[cfg(target_os = "freebsd")]
@@ -955,7 +984,6 @@ fn write_minibsod<W: Write>(writer: &mut BufWriter<W>) -> Result<(), std::io::Er
 }
 
 #[cfg(target_vendor = "apple")]
-#[allow(non_camel_case_types)]
 fn write_minibsod<W: Write>(writer: &mut BufWriter<W>) -> Result<(), std::io::Error> {
     let mut ptask = std::mem::MaybeUninit::<mach_port_t>::uninit();
     // We start by the lowest virtual address from the userland' standpoint
@@ -1057,7 +1085,7 @@ fn write_minibsod<W: Write>(writer: &mut BufWriter<W>) -> Result<(), std::io::Er
 
 /// Generates a mini-BSOD given a signal and context.
 #[cfg(unix)]
-#[allow(clippy::non_ascii_literal, clippy::too_many_lines)]
+#[expect(clippy::non_ascii_literal)]
 pub fn generate_minibsod<W: Write>(
     writer: &mut BufWriter<W>,
     signal: Signal,
@@ -1084,11 +1112,7 @@ pub fn generate_minibsod<W: Write>(
 
 /// Generates a mini-BSOD given an `EXCEPTION_POINTERS` structure.
 #[cfg(windows)]
-#[allow(
-    clippy::non_ascii_literal,
-    clippy::too_many_lines,
-    clippy::not_unsafe_ptr_arg_deref
-)]
+#[expect(clippy::non_ascii_literal, clippy::not_unsafe_ptr_arg_deref)]
 pub fn generate_minibsod<W: Write>(
     writer: &mut BufWriter<W>,
     exception_pointers: *mut EXCEPTION_POINTERS,
@@ -1115,9 +1139,88 @@ mod tests {
 
     #[test]
     #[cfg_attr(miri, ignore)]
-    pub fn test_dump_registers() {
+    fn test_dump_registers() {
         let ucontext = ucontext().unwrap();
         let mut writer = BufWriter::new(stdout());
         dump_registers(&mut writer, &ucontext).unwrap();
+    }
+}
+
+#[cfg(windows)]
+#[cfg(test)]
+mod tests {
+
+    use std::{
+        io::{stdout, BufWriter},
+        os::raw::c_void,
+        sync::mpsc,
+    };
+
+    use windows::Win32::{
+        Foundation::{CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE},
+        System::{
+            Diagnostics::Debug::{
+                GetThreadContext, CONTEXT, CONTEXT_FULL_AMD64, CONTEXT_FULL_ARM64, CONTEXT_FULL_X86,
+            },
+            Threading::{GetCurrentProcess, GetCurrentThread, ResumeThread, SuspendThread},
+        },
+    };
+
+    use crate::minibsod::dump_registers;
+
+    #[derive(Default)]
+    #[repr(align(16))]
+    struct Align16 {
+        pub ctx: CONTEXT,
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn test_dump_registers() {
+        let (tx, rx) = mpsc::channel();
+        let (evt_tx, evt_rx) = mpsc::channel();
+        let t = std::thread::spawn(move || {
+            let cur = unsafe { GetCurrentThread() };
+            let proc = unsafe { GetCurrentProcess() };
+            let mut out = HANDLE::default();
+            unsafe {
+                DuplicateHandle(
+                    proc,
+                    cur,
+                    proc,
+                    &raw mut out,
+                    0,
+                    true,
+                    DUPLICATE_SAME_ACCESS,
+                )
+                .unwrap();
+            };
+            tx.send(out.0 as i64).unwrap();
+            evt_rx.recv().unwrap();
+        });
+
+        let thread = rx.recv().unwrap();
+        let thread = HANDLE(thread as *mut c_void);
+        eprintln!("thread: {thread:?}");
+        unsafe { SuspendThread(thread) };
+
+        // https://stackoverflow.com/questions/56516445/getting-0x3e6-when-calling-getthreadcontext-for-debugged-thread
+        let mut c = Align16::default();
+        if cfg!(target_arch = "x86") {
+            c.ctx.ContextFlags = CONTEXT_FULL_X86;
+        } else if cfg!(target_arch = "x86_64") {
+            c.ctx.ContextFlags = CONTEXT_FULL_AMD64;
+        } else if cfg!(target_arch = "aarch64") {
+            c.ctx.ContextFlags = CONTEXT_FULL_ARM64;
+        }
+        unsafe { GetThreadContext(thread, &raw mut (c.ctx)).unwrap() };
+
+        let mut writer = BufWriter::new(stdout());
+        dump_registers(&mut writer, &c.ctx).unwrap();
+
+        unsafe { ResumeThread(thread) };
+        unsafe { CloseHandle(thread).unwrap() };
+        evt_tx.send(true).unwrap();
+        t.join().unwrap();
     }
 }

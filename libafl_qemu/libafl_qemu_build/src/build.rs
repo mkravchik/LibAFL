@@ -9,11 +9,10 @@ use which::which;
 
 use crate::cargo_add_rpath;
 
-const QEMU_URL: &str = "https://github.com/AFLplusplus/qemu-libafl-bridge";
-const QEMU_DIRNAME: &str = "qemu-libafl-bridge";
-const QEMU_REVISION: &str = "9d2197b73bf5e66e709f9f1669467d5c84062da0";
+pub const QEMU_URL: &str = "https://github.com/AFLplusplus/qemu-libafl-bridge";
+pub const QEMU_DIRNAME: &str = "qemu-libafl-bridge";
+pub const QEMU_REVISION: &str = "06bf8facec33548840413fba1b20858f58e38e2d";
 
-#[allow(clippy::module_name_repetitions)]
 pub struct BuildResult {
     pub qemu_path: PathBuf,
     pub build_dir: PathBuf,
@@ -59,7 +58,7 @@ fn get_config_signature(config_cmd: &Command) -> String {
     signature_string
 }
 
-#[allow(clippy::too_many_lines)]
+#[expect(clippy::too_many_lines)]
 fn configure_qemu(
     cc_compiler: &cc::Tool,
     cpp_compiler: &cc::Tool,
@@ -86,12 +85,15 @@ fn configure_qemu(
         .env("__LIBAFL_QEMU_BUILD_OUT", build_dir.join("linkinfo.json"))
         .env("__LIBAFL_QEMU_BUILD_CC", cc_compiler.path())
         .env("__LIBAFL_QEMU_BUILD_CXX", cpp_compiler.path())
-        .arg(&format!("--cc={}", linker_interceptor.display()))
-        .arg(&format!("--cxx={}", linker_interceptor_plus_plus.display()))
+        .arg(format!("--cc={}", linker_interceptor.display()))
+        .arg(format!("--cxx={}", linker_interceptor_plus_plus.display()))
         .arg("--as-shared-lib")
-        .arg(&format!("--target-list={cpu_target}-{target_suffix}"))
+        .arg(format!("--target-list={cpu_target}-{target_suffix}"))
+        .arg("--disable-bsd-user")
         // .arg("--disable-capstone")
-        .arg("--disable-bsd-user");
+        .arg("--disable-docs")
+        .arg("--disable-tests")
+        .arg("--disable-tools");
 
     if cfg!(feature = "paranoid_debug") {
         cmd.arg("--enable-debug")
@@ -137,14 +139,14 @@ fn configure_qemu(
         .arg("--disable-gio")
         .arg("--disable-glusterfs")
         .arg("--disable-gnutls")
-        .arg("--disable-gtk")
-        .arg("--disable-guest-agent")
-        .arg("--disable-guest-agent-msi")
+        // .arg("--disable-gtk")
+        // .arg("--disable-guest-agent")
+        // .arg("--disable-guest-agent-msi")
         .arg("--disable-hvf")
         .arg("--disable-iconv")
         .arg("--disable-jack")
         .arg("--disable-keyring")
-        .arg("--disable-kvm")
+        // .arg("--disable-kvm")
         .arg("--disable-libdaxctl")
         .arg("--disable-libiscsi")
         .arg("--disable-libnfs")
@@ -155,7 +157,7 @@ fn configure_qemu(
         .arg("--disable-linux-aio")
         .arg("--disable-linux-io-uring")
         .arg("--disable-linux-user")
-        .arg("--disable-live-block-migration")
+        // .arg("--disable-live-block-migration")
         .arg("--disable-lzfse")
         .arg("--disable-lzo")
         .arg("--disable-l2tpv3")
@@ -171,7 +173,7 @@ fn configure_qemu(
         .arg("--disable-pa")
         .arg("--disable-parallels")
         .arg("--disable-png")
-        .arg("--disable-pvrdma")
+        // .arg("--disable-pvrdma")
         .arg("--disable-qcow1")
         .arg("--disable-qed")
         .arg("--disable-qga-vss")
@@ -214,8 +216,7 @@ fn configure_qemu(
         .arg("--disable-xen")
         .arg("--disable-xen-pci-passthrough")
         .arg("--disable-xkbcommon")
-        .arg("--disable-zstd")
-        .arg("--disable-tests");
+        .arg("--disable-zstd");
     }
 
     cmd
@@ -237,13 +238,13 @@ fn build_qemu(
         .arg("-j");
 
     if let Some(j) = jobs {
-        cmd.arg(&format!("{j}")).env("V", "1");
+        cmd.arg(format!("{j}")).env("V", "1");
     }
 
     cmd
 }
 
-#[allow(clippy::too_many_lines, clippy::missing_panics_doc)]
+#[expect(clippy::too_many_lines, clippy::missing_panics_doc)]
 #[must_use]
 pub fn build(
     cpu_target: &str,
@@ -430,11 +431,11 @@ pub fn build(
         );
     }
 
-    assert!(output_lib.is_file()); // Sanity check
+    assert!(output_lib.is_file()); // Make sure this isn't very very wrong
 
     /*
     let mut objects = vec![];
-    for dir in &[
+    for dir in [
         build_dir.join("libcommon.fa.p"),
         build_dir.join(format!("libqemu-{cpu_target}-{target_suffix}.fa.p")),
     ] {

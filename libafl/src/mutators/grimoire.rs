@@ -2,7 +2,10 @@
 //! See the original repo [`Grimoire`](https://github.com/RUB-SysSec/grimoire) for more details.
 
 use alloc::{borrow::Cow, vec::Vec};
-use core::cmp::{max, min};
+use core::{
+    cmp::{max, min},
+    num::NonZero,
+};
 
 use libafl_bolts::{
     rands::{choose, fast_bound, Rand},
@@ -30,14 +33,14 @@ fn extend_with_random_generalized<S>(
 where
     S: HasMetadata + HasRand + HasCorpus,
 {
-    let idx = random_corpus_id!(state.corpus(), state.rand_mut());
+    let id = random_corpus_id!(state.corpus(), state.rand_mut());
 
     if state.rand_mut().coinflip(CHOOSE_SUBINPUT_PROB) {
         if state.rand_mut().coinflip(0.5) {
             let rand1 = state.rand_mut().next();
             let rand2 = state.rand_mut().next();
 
-            let other_testcase = state.corpus().get(idx)?.borrow();
+            let other_testcase = state.corpus().get(id)?.borrow();
             if let Some(other) = other_testcase
                 .metadata_map()
                 .get::<GeneralizedInputMetadata>()
@@ -88,7 +91,7 @@ where
         }
     }
 
-    let other_testcase = state.corpus().get(idx)?.borrow();
+    let other_testcase = state.corpus().get(id)?.borrow();
     if let Some(other) = other_testcase
         .metadata_map()
         .get::<GeneralizedInputMetadata>()
@@ -246,13 +249,19 @@ where
         let tokens_len = {
             let meta = state.metadata_map().get::<Tokens>();
             if let Some(tokens) = meta {
-                if tokens.is_empty() {
+                if let Some(tokens_len) = NonZero::new(tokens.tokens().len()) {
+                    tokens_len
+                } else {
                     return Ok(MutationResult::Skipped);
                 }
-                tokens.tokens().len()
             } else {
                 return Ok(MutationResult::Skipped);
             }
+        };
+
+        let gen = generalised_meta.generalized_mut();
+        let Some(_) = NonZero::new(gen.len()) else {
+            return Err(Error::illegal_state("No generalized metadata found."));
         };
 
         let token_find = state.rand_mut().below(tokens_len);
@@ -270,8 +279,11 @@ where
 
         let mut mutated = MutationResult::Skipped;
 
-        let gen = generalised_meta.generalized_mut();
-        let rand_idx = fast_bound(rand_idx, gen.len());
+        // # Safety
+        // gen.len() is positive.
+        let rand_idx = fast_bound(rand_idx, unsafe {
+            NonZero::new(gen.len()).unwrap_unchecked()
+        });
 
         'first: for item in &mut gen[..rand_idx] {
             if let GeneralizedItem::Bytes(bytes) = item {
@@ -279,7 +291,7 @@ where
                 while bytes
                     .len()
                     .checked_sub(token_1.len())
-                    .map_or(false, |len| i < len)
+                    .is_some_and(|len| i < len)
                 {
                     if bytes[i..].starts_with(token_1) {
                         bytes.splice(i..(i + token_1.len()), token_2.iter().copied());
@@ -302,7 +314,7 @@ where
                     while bytes
                         .len()
                         .checked_sub(token_1.len())
-                        .map_or(false, |len| i < len)
+                        .is_some_and(|len| i < len)
                     {
                         if bytes[i..].starts_with(token_1) {
                             bytes.splice(i..(i + token_1.len()), token_2.iter().copied());
@@ -363,8 +375,15 @@ where
         {
             self.gap_indices.push(i);
         }
-        let min_idx = self.gap_indices[state.rand_mut().below(self.gap_indices.len())];
-        let max_idx = self.gap_indices[state.rand_mut().below(self.gap_indices.len())];
+
+        let Some(gap_indeces_len) = NonZero::new(self.gap_indices.len()) else {
+            return Err(Error::illegal_state(
+                "Gap indices may not be empty in grimoire mutator!",
+            ));
+        };
+
+        let min_idx = self.gap_indices[state.rand_mut().below(gap_indeces_len)];
+        let max_idx = self.gap_indices[state.rand_mut().below(gap_indeces_len)];
 
         let (min_idx, max_idx) = (min(min_idx, max_idx), max(min_idx, max_idx));
 
