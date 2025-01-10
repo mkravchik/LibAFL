@@ -110,7 +110,7 @@ pub mod windows_exception_handler {
     use core::{
         ffi::c_void,
         mem::transmute,
-        ptr::{self, addr_of_mut},
+        ptr,
         sync::atomic::{compiler_fence, Ordering},
     };
     #[cfg(feature = "std")]
@@ -407,7 +407,7 @@ pub mod windows_exception_handler {
                             CallbackParam: *mut c_void,
                         ) -> BOOL;
                     }
-                    
+
                     const MINI_DUMP_FULL_MEMORY_INFO: i32 = 0x00000800;
                     const MINI_DUMP_WITH_FULL_MEMORY: i32 = 0x2;
                     const MINI_DUMP_WITH_HANDLE_DATA: i32 = 0x4;

@@ -77,7 +77,7 @@ pub mod utils;
 use libafl_bolts::core_affinity::{get_core_ids, CoreId, Cores};
 /// A representation of the various Frida options
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-#[expect(clippy::struct_excessive_bools)]
+// #[expect(clippy::struct_excessive_bools)]
 pub struct FridaOptions {
     enable_asan: bool,
     enable_asan_leak_detection: bool,

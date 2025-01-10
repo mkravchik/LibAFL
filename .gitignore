@@ -22,7 +22,8 @@ vendor
 *.dylib
 *.dSYM
 *.obj
-
+*.patch
+*.diff
 .cur_input
 .cur_input_*
 cur_input

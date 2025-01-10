@@ -7,6 +7,7 @@ use std::{
     marker::PhantomPinned,
     path::PathBuf,
     pin::Pin,
+    ptr::addr_of_mut,
     rc::Rc,
 };
 
@@ -34,7 +35,7 @@ struct CoverageRuntimeInner {
 #[derive(Debug)]
 struct DrCov {
     inner_bbs: Pin<Rc<RefCell<CoverageRuntimeInner>>>,
-    ranges: RangeMap<usize, (u16, String)>,
+    ranges: RangeMap<u64, (u16, String)>,
     coverage_directory: PathBuf,
     basic_blocks: HashMap<u64, DrCovBasicBlock>,
     cnt: usize,
@@ -62,7 +63,7 @@ impl FridaRuntime for CoverageRuntime {
     fn init(
         &mut self,
         _gum: &frida_gum::Gum,
-        _ranges: &RangeMap<u64, (u16, String)>,
+        ranges: &RangeMap<u64, (u16, String)>,
         _module_map: &Rc<ModuleMap>,
     ) {
         if self.save_dr_cov {
@@ -100,11 +101,11 @@ impl FridaRuntime for CoverageRuntime {
             }
             let mut coverage_hasher = RandomState::with_seeds(0, 0, 0, 0).build_hasher();
             for bb in &drcov_basic_blocks {
-                coverage_hasher.write_usize(bb.start);
-                coverage_hasher.write_usize(bb.end);
+                coverage_hasher.write_u64(bb.start);
+                coverage_hasher.write_u64(bb.end);
             }
             let coverage_hash = coverage_hasher.finish();
-            let input_name = input.generate_name(0); // The input index is not known at this point, but is not used in the filename
+            let input_name = format!("{:016x}", hash_std(input_bytes));
             let filename = if self.drcov.max_cnt > 0 {
                 self.drcov.coverage_directory.join(format!(
                     "{}_{coverage_hash:016x}_{}-{}.drcov",
@@ -304,18 +305,19 @@ impl CoverageRuntime {
                 // Skip the data
                 ;   b >end
 
-            ;map_addr:
-            ;.i64 map_addr_ptr as i64
-            ;previous_loc:
-            ;.i64 prev_loc_ptr as i64
-            ;loc:
-            ;.i64 h64 as i64
-            ;loc_shr:
-            ;.i64 (h64 >> 1) as i64
-            ;end:
-        );
-        let ops_vec = ops.finalize().unwrap();
-        ops_vec[..ops_vec.len()].to_vec().into_boxed_slice()
+                ;map_addr:
+                ;.i64 map_addr_ptr as i64
+                ;previous_loc:
+                ;.i64 prev_loc_ptr as i64
+                ;loc:
+                ;.i64 h64 as i64
+                ;loc_shr:
+                ;.i64 (h64 >> 1) as i64
+                ;end:
+            );
+            let ops_vec = ops.finalize().unwrap();
+            ops_vec[..ops_vec.len()].to_vec().into_boxed_slice()
+        }
     }
 
     /// Write inline instrumentation for coverage
@@ -427,7 +429,7 @@ impl CoverageRuntime {
         if self.save_dr_cov {
             let h64 = hash_std(&address.to_le_bytes());
             let map_idx: u64 = h64 & (MAP_SIZE as u64 - 1);
-            let basic_block = DrCovBasicBlock::with_size(address as usize, size);
+            let basic_block = DrCovBasicBlock::with_size(address, size);
             self.drcov.basic_blocks.insert(map_idx, basic_block);
         }
     }

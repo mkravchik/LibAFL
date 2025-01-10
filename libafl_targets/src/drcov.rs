@@ -8,7 +8,7 @@ use core::{fmt::Debug, num::ParseIntError, ptr};
 use std::{
     fs::File,
     io::{BufRead, BufReader, BufWriter, Read, Write},
-    mem::size_of,    
+    mem::size_of,
     path::{Path, PathBuf},
 };
 
@@ -624,13 +624,13 @@ struct DrCovBasicBlockEntryWithCounter {
 /// This is used for aggregated BB traces
 #[derive(Debug)]
 pub struct DrCovWriterWithCounter<'a> {
-    module_mapping: &'a RangeMap<usize, (u16, String)>,
+    module_mapping: &'a RangeMap<u64, (u16, String)>,
 }
 
 impl<'a> DrCovWriterWithCounter<'a> {
     /// Create a new [`DrCovWriterWithCounter`]
     #[must_use]
-    pub fn new(module_mapping: &'a RangeMap<usize, (u16, String)>) -> Self {
+    pub fn new(module_mapping: &'a RangeMap<u64, (u16, String)>) -> Self {
         Self { module_mapping }
     }
 
@@ -684,94 +684,7 @@ impl<'a> DrCovWriterWithCounter<'a> {
                 writer
                     .write_all(unsafe {
                         std::slice::from_raw_parts(
-                            addr_of!(basic_block) as *const u8,
-                            size_of::<DrCovBasicBlockEntryWithCounter>(),
-                        )
-                    })
-                    .unwrap();
-            }
-        }
-
-        writer.flush()?;
-
-        Ok(())
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(C)]
-struct DrCovBasicBlockEntryWithCounter {
-    start: u32,
-    size: u16,
-    mod_id: u16,
-    count: u32,
-}
-
-/// A writer for `DrCov` files with counters
-/// This is used for aggregated BB traces
-#[derive(Debug)]
-pub struct DrCovWriterWithCounter<'a> {
-    module_mapping: &'a RangeMap<usize, (u16, String)>,
-}
-
-impl<'a> DrCovWriterWithCounter<'a> {
-    /// Create a new [`DrCovWriterWithCounter`]
-    #[must_use]
-    pub fn new(module_mapping: &'a RangeMap<usize, (u16, String)>) -> Self {
-        Self { module_mapping }
-    }
-
-    /// Write the list of basic blocks to a `DrCov` file.
-    pub fn write<P>(
-        &mut self,
-        path: P,
-        basic_blocks: &[DrCovBasicBlock],
-        counters: &[u32],
-    ) -> Result<(), Error>
-    where
-        P: AsRef<Path>,
-    {
-        // If the length of the basic blocks and the counters is not the same, we can't write the file
-        if basic_blocks.len() != counters.len() {
-            return Err(Error::illegal_argument(
-                "The length of the basic blocks and the counters is not the same",
-            ));
-        }
-
-        // Use the original writer to write the basic blocks
-        DrCovWriter::new(self.module_mapping).write(path.as_ref(), basic_blocks)?;
-
-        // Now write the counters
-        // Append the .cnt suffix to the file
-        let mut path = path.as_ref().to_path_buf();
-        let old_extension = path.extension().unwrap_or_default();
-        let new_extension = format!("{}.cnt", old_extension.to_string_lossy());
-        path.set_extension(new_extension);
-
-        let mut writer = BufWriter::new(File::create(path)?);
-
-        // Write the counters, all modules info is contained in the original file
-        // I don't like it, but I don't like unnecessary parsing either
-        for (index, block) in basic_blocks.iter().enumerate() {
-            // Try finding the module for this basic block
-            // If we can't find it, at least log a warning
-            if self.module_mapping.get_key_value(&block.start).is_none() {
-                log::warn!(
-                    "Basic block at 0x{:x} not found in module mapping",
-                    block.start
-                );
-            } else {
-                let (range, (id, _)) = self.module_mapping.get_key_value(&block.start).unwrap();
-                let basic_block = DrCovBasicBlockEntryWithCounter {
-                    start: (block.start - range.start) as u32,
-                    size: (block.end - block.start) as u16,
-                    mod_id: *id,
-                    count: counters[index],
-                };
-                writer
-                    .write_all(unsafe {
-                        std::slice::from_raw_parts(
-                            addr_of!(basic_block) as *const u8,
+                            ptr::addr_of!(basic_block) as *const u8,
                             size_of::<DrCovBasicBlockEntryWithCounter>(),
                         )
                     })
